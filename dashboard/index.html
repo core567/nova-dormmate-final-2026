@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>DormMate 实时 Dashboard</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; gap: 20px; padding: 20px; }
+        .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; width: 200px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .title { font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #333; }
+        .data-row { margin: 5px 0; }
+        .status { font-weight: bold; color: #d32f2f; }
+    </style>
+</head>
+<body>
+    <div class="card" id="dorm-a">
+        <div class="title">宿舍 A (dorm-a)</div>
+        <div class="data-row">温度: <span class="temp">-</span>℃</div>
+        <div class="data-row">湿度: <span class="humid">-</span>%</div>
+        <div class="data-row">状态: <span class="status">等待数据</span></div>
+    </div>
+    <div class="card" id="dorm-b">
+        <div class="title">宿舍 B (dorm-b)</div>
+        <div class="data-row">温度: <span class="temp">-</span>℃</div>
+        <div class="data-row">湿度: <span class="humid">-</span>%</div>
+        <div class="data-row">状态: <span class="status">等待数据</span></div>
+    </div>
+    <div class="card" id="dorm-c">
+        <div class="title">宿舍 C (dorm-c)</div>
+        <div class="data-row">温度: <span class="temp">-</span>℃</div>
+        <div class="data-row">湿度: <span class="humid">-</span>%</div>
+        <div class="data-row">状态: <span class="status">等待数据</span></div>
+    </div>
+
+    <script>
+        // 【注意】：这里用了 8083 端口，并且路径是 /mqtt
+        const client = mqtt.connect('ws://127.0.0.1:8083/mqtt');
+
+        client.on('connect', () => {
+            console.log('网页已成功连接至 Broker！');
+            // 订阅 3 个节点的频道
+            client.subscribe('dormmate/+/env');
+        });
+
+        client.on('message', (topic, message) => {
+            const data = JSON.parse(message.toString());
+            const card = document.getElementById(data.nodeId);
+            if (card) {
+                card.querySelector('.temp').innerText = data.temperature;
+                card.querySelector('.humid').innerText = data.humidity;
+                card.querySelector('.status').innerText = data.status;
+            }
+        });
+    </script>
+</body>
+</html>
