@@ -1,0 +1,71 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>DormMate 环境报告</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .summary { background: #f4f4f9; padding: 15px; border-radius: 5px; }
+        .chart { margin-top: 20px; text-align: center; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #4CAF50; color: white; }
+    </style>
+</head>
+<body>
+    <h1>DormMate 环境分析报告</h1>
+    <div class="summary">
+        <h2>数据摘要</h2>
+        <p>总记录数: 6 条</p>
+        <p>最高温度: 38℃</p>
+        <p>最低温度: 12℃</p>
+        <p>需要关注的记录数: 4 条</p>
+        <p><strong>状态分布：</strong> {'偏热': 2, '正常': 2, '偏冷': 1, '偏湿': 1}</p>
+    </div>
+
+    <div class="chart">
+        <h2>温湿度趋势图</h2>
+        <img src="trend.png" alt="趋势图" style="max-width: 100%;">
+    </div>
+
+    <h2>需要关注的记录明细</h2>
+    <table>
+        <tr>
+            <th>时间</th>
+            <th>温度</th>
+            <th>湿度</th>
+            <th>状态</th>
+        </tr>
+
+        <tr>
+            <td>2026/9/27 18:19:24</td>
+            <td>12℃</td>
+            <td>60%</td>
+            <td style="color: red;">偏冷</td>
+        </tr>
+    
+        <tr>
+            <td>2026/9/27 18:19:31</td>
+            <td>30℃</td>
+            <td>50%</td>
+            <td style="color: red;">偏热</td>
+        </tr>
+    
+        <tr>
+            <td>2026/9/27 18:19:38</td>
+            <td>27℃</td>
+            <td>80%</td>
+            <td style="color: red;">偏湿</td>
+        </tr>
+    
+        <tr>
+            <td>2026/9/27 18:20:10</td>
+            <td>38℃</td>
+            <td>12%</td>
+            <td style="color: red;">偏热</td>
+        </tr>
+    
+    </table>
+</body>
+</html>

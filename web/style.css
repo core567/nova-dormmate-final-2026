@@ -1,0 +1,62 @@
+/* 基础布局 */
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f9;
+    display: flex;
+    justify-content: center;
+    padding-top: 50px;
+}
+
+.container {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    width: 400px;
+}
+
+/* 输入区域 */
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+input {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    margin-left: 10px;
+}
+
+button {
+    padding: 10px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+/* 结果区域 */
+.result-box {
+    background-color: #e8f5e9;
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+/* 历史记录 */
+.history-box ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+.history-box li {
+    background: #f9f9f9;
+    border-left: 4px solid #4CAF50;
+    padding: 8px;
+    margin-bottom: 5px;
+    font-size: 14px;
+}

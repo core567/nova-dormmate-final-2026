@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>DormMate 助手</title>
+    <!-- 引入外部 CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>DormMate 宿舍环境助手</h1>
+        
+        <div class="input-group">
+            <label>温度 (℃): <input type="number" id="tempInput" placeholder="如 31"></label>
+            <label>湿度 (%): <input type="number" id="humidInput" placeholder="如 78"></label>
+            <button id="analyzeBtn">分析环境</button>
+            <button id="exportBtn" style="background-color: #2196F3; margin-top: 10px;">导出 CSV 数据</button>
+        </div>
+
+        <div class="result-box">
+            <div class="camera-box" style="margin-top: 20px; border-top: 1px dashed #ccc; padding-top: 10px;">
+    <h3>环境快照</h3>
+    <button id="startCameraBtn">开启摄像头</button>
+    <button id="snapBtn" disabled>拍照</button>
+    <br><br>
+    <video id="video" width="300" autoplay style="display: none; border-radius: 5px;"></video>
+    <canvas id="canvas" width="300" height="225" style="display: none; border-radius: 5px;"></canvas>
+    <br>
+    <img id="snapshot" style="width: 300px; border-radius: 5px; display: none;">
+</div>
+            <h2>当前状态：<span id="statusDisplay">等待分析</span></h2><button id="ttsBtn" style="margin-top: 5px;">🔊 朗读状态</button>
+            <p>建议：<span id="adviceDisplay">-</span></p>
+        </div>
+
+        <div class="history-box">
+            <h2>历史记录</h2>
+            <ul id="historyList"></ul>
+        </div>
+    </div>
+
+    <!-- 引入外部 JS -->
+    <script src="script.js"></script>
+</body>
+</html>
