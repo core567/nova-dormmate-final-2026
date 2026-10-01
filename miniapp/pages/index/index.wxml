@@ -33,6 +33,7 @@
       <view class="tags">
         <text class="tag {{item.statusClass}}">{{item.status}}</text>
         <text class="tag {{item.phaseClass}}">{{item.phaseLabel}}</text>
+        <text class="tag tag-offline" wx:if="{{item.offline}}">节点离线</text>
       </view>
 
       <view class="episode" wx:if="{{item.episodeText}}">{{item.episodeText}}</view>

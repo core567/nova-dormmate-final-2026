@@ -86,6 +86,9 @@ page {
 .ph-handling  { background: #2563eb; }
 .ph-recovered { background: #16a34a; }
 
+/* 任务 D4：节点离线徽标 */
+.tag-offline  { background: #475569; }
+
 .episode {
   margin-top: 14rpx;
   font-size: 24rpx;

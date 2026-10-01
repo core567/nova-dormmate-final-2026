@@ -23,6 +23,7 @@ const PHASE_CLASS = {
 const STATUS_CLASS = {
   '正常': 'st-normal', '偏冷': 'st-cold', '偏热': 'st-hot', '偏湿': 'st-wet'
 };
+const OFFLINE_MS = 10000;   // 任务 D4：超过该时长未收到数据即判定节点离线
 
 /** 固定阈值规则：与 web / dashboard / 3d / publisher / analyze 保持一致 */
 function calcStatus(temperature, humidity) {
@@ -299,6 +300,8 @@ Page({
           episodeText += ' · 已收到 ' + s.verifyData.length + ' 组验证数据';
         }
       }
+      // 任务 D4：节点离线判定（只影响显示，不改变事件状态机）
+      const offline = s.lastUpdate !== null && (Date.now() - s.lastUpdate) > OFFLINE_MS;
       return {
         id: id,
         label: NODE_LABEL[id],
@@ -309,6 +312,7 @@ Page({
         phaseLabel: PHASE_LABEL[s.phase],
         phaseClass: PHASE_CLASS[s.phase],
         episodeText: episodeText,
+        offline: offline,
         canFan: s.phase === 'open'
       };
     });

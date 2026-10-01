@@ -388,6 +388,16 @@
     <table class="event-table" id="eventTable"></table>
 </div>
 
+<div class="panel">
+    <div class="log-head">
+        <h2>链路日志（任务 D4 · 持久化）</h2>
+        <span>
+            <button class="toolbar-btn" id="exportLinkLogBtn">导出链路日志</button>
+        </span>
+    </div>
+    <div class="log" id="linkLog"></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -402,7 +412,13 @@
     var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
     var MAX_POINTS = 60;
     var MAX_LOG = 50;
-    var STALE_MS = 10000;
+    var STALE_MS = 10000;              // 超过该时长未收到数据，判定节点离线
+    var LINK_LOG_KEY = 'dormmate_link_log';
+    var MAX_LINK_LOG = 200;
+
+    // 任务 D4：节点在线状态（仅在状态翻转时写链路日志，避免每秒重复记录）
+    var offlineState = {};
+    NODES.forEach(function (id) { offlineState[id] = false; });
 
     // ---------- 状态：每个节点一份独立数据，互不串号 ----------
     var state = {};
@@ -461,6 +477,8 @@
     var situationEl = document.getElementById('situationText');
     var rankListEl = document.getElementById('rankList');
     var ttsBtn = document.getElementById('ttsBtn');
+    var linkLogEl = document.getElementById('linkLog');
+    var exportLinkLogBtn = document.getElementById('exportLinkLogBtn');
 
     // ---------- 通用工具 ----------
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
@@ -551,6 +569,79 @@
         } catch (err) {
             log('warn', '事件日志写入 localStorage 失败：' + err.message);
         }
+    }
+
+    /* =========================================================
+       任务 D4：持久化链路日志
+       记录三类事件：offline（节点离线）/ recovered（恢复在线）/ fault（消息异常）
+       存 localStorage，刷新页面不丢，可导出 link_log.csv
+       ========================================================= */
+
+    var linkLog = loadLinkLog();
+
+    function loadLinkLog() {
+        try {
+            var raw = window.localStorage.getItem(LINK_LOG_KEY);
+            var parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+            return [];
+        }
+    }
+
+    function saveLinkLog() {
+        try {
+            window.localStorage.setItem(LINK_LOG_KEY, JSON.stringify(linkLog));
+        } catch (err) {
+            log('warn', '链路日志写入 localStorage 失败：' + err.message);
+        }
+    }
+
+    function addLinkLog(type, node, detail) {
+        linkLog.push({ time: nowStamp(), type: type, node: node || '—', detail: detail });
+        while (linkLog.length > MAX_LINK_LOG) linkLog.shift();
+        saveLinkLog();
+        renderLinkLog();
+    }
+
+    function renderLinkLog() {
+        if (!linkLogEl) return;
+        if (!linkLog.length) {
+            linkLogEl.innerHTML = '<div class="log-line log-info">' +
+                '<span class="log-msg">暂无链路日志</span></div>';
+            return;
+        }
+        var html = '';
+        linkLog.slice(-20).reverse().forEach(function (e) {
+            var cls = e.type === 'recovered' ? 'ok'
+                : (e.type === 'offline' ? 'error' : 'warn');
+            html += '<div class="log-line log-' + cls + '">' +
+                '<span class="log-time">' + escapeHtml(e.time.slice(11)) + '</span>' +
+                '<span class="log-msg">[' + escapeHtml(e.type) + '] ' +
+                escapeHtml(e.node) + ' — ' + escapeHtml(e.detail) + '</span></div>';
+        });
+        linkLogEl.innerHTML = html;
+    }
+
+    function exportLinkLog() {
+        if (!linkLog.length) {
+            showToast('暂无链路日志可导出');
+            return;
+        }
+        var csv = 'time,type,node,detail\n';
+        linkLog.forEach(function (e) {
+            csv += [e.time, e.type, e.node, e.detail].map(csvCell).join(',') + '\n';
+        });
+
+        var blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'link_log.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        log('info', '已导出链路日志 link_log.csv（' + linkLog.length + ' 条）');
+        showToast('已导出 link_log.csv（' + linkLog.length + ' 条）');
     }
 
     function showToast(text) {
@@ -931,7 +1022,7 @@
                 '<div class="metric"><span class="label">湿度</span>' +
                 '<span class="value humid">--</span><span class="unit">%</span></div>' +
                 '<div class="status-line"><span class="badge status">等待数据</span>' +
-                '<span class="stale-tag">数据超时</span></div>' +
+                '<span class="stale-tag">节点离线</span></div>' +
                 '<div class="card-time">最后更新：--</div>' +
                 '<div class="task-a-line"><span class="phase-chip" data-phase="normal">正常</span>' +
                 '<span class="anomaly-info">累计异常 0 次</span></div>' +
@@ -982,13 +1073,30 @@
         card.classList.toggle('active', currentView === id);
     }
 
+    /* 任务 D4：节点离线检测。
+       超过 STALE_MS 未收到该节点数据即判定离线；只在状态翻转的那一刻写链路日志，
+       否则每秒都会重复记一条。 */
     function checkStale() {
         var now = Date.now();
         NODES.forEach(function (id) {
             var s = state[id];
-            var stale = s.lastUpdate !== null && (now - s.lastUpdate) > STALE_MS;
+            if (s.lastUpdate === null) return;       // 还没收到过数据，不判离线
+
+            var offline = (now - s.lastUpdate) > STALE_MS;
             var card = document.getElementById('card-' + id);
-            if (card) card.classList.toggle('stale', stale);
+            if (card) card.classList.toggle('stale', offline);
+
+            if (offline !== offlineState[id]) {
+                offlineState[id] = offline;
+                if (offline) {
+                    addLinkLog('offline', id,
+                        '超过 ' + (STALE_MS / 1000) + ' 秒未收到数据，判定节点离线');
+                    log('error', id + ' 节点离线：数据中断');
+                } else {
+                    addLinkLog('recovered', id, '重新收到数据，节点恢复在线');
+                    log('ok', id + ' 节点恢复在线');
+                }
+            }
         });
     }
 
@@ -1146,18 +1254,21 @@
             data = JSON.parse(raw);
         } catch (err) {
             log('error', '非法 JSON，已忽略 | topic=' + topic + ' | payload=' + truncate(raw, 60));
+            addLinkLog('fault', topic, '非法 JSON，已忽略：' + truncate(raw, 40));
             return;
         }
 
         var matched = topic.match(TOPIC_RE);
         if (!matched) {
             log('error', 'Topic 格式不正确，已忽略 | ' + topic);
+            addLinkLog('fault', topic, 'Topic 格式不正确，已忽略');
             return;
         }
 
         var topicNode = matched[1];
         if (NODES.indexOf(topicNode) === -1) {
             log('error', '未知节点，已忽略 | ' + topic);
+            addLinkLog('fault', topic, '未知节点，已忽略');
             return;
         }
         if (!data || typeof data !== 'object' || NODES.indexOf(data.nodeId) === -1) {
@@ -1246,8 +1357,10 @@
     renderEvents();
     renderSituation();
     renderRank();
+    renderLinkLog();
     exportBtn.addEventListener('click', exportEvents);
     ttsBtn.addEventListener('click', speakReminder);
+    exportLinkLogBtn.addEventListener('click', exportLinkLog);
 
     // 每秒刷新：异常持续时间随钟表增长，没有新数据时也要更新显示
     setInterval(function () {

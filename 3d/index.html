@@ -214,6 +214,7 @@
     var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
     var FAN_TOPIC_RE = /^dormmate\/([^/]+)\/fan$/;
     var FAN_OVERRIDE_MS = 30000;   // 手动开启风扇后强制运转的时长
+    var OFFLINE_MS = 10000;        // 任务 D4：超过该时长未收到数据即判定节点离线
     var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
 
     var ROOM = { w: 6, h: 3.1, d: 4 };            // 房间尺寸（米）
@@ -810,6 +811,8 @@
         Array.prototype.forEach.call(nodeSwitchEl.children, function (btn) {
             btn.classList.toggle('active', btn.getAttribute('data-node') === nodeId);
         });
+        offlineFlag = false;        // 任务 D4：切换宿舍后重置离线标记
+        hudTime.style.color = '';
         log('info', '已切换到 ' + nodeId + '（' + NODE_LABEL[nodeId] + '）');
 
         var cached = nodeCache[nodeId];
@@ -891,6 +894,7 @@
 
         nodeCache[data.nodeId] = {
             status: status,
+            lastUpdate: Date.now(),      // 任务 D4：节点离线检测用
             data: {
                 nodeId: data.nodeId,
                 temperature: temp,
@@ -911,6 +915,9 @@
        仅新增处理分支，不影响上方 env 消息的接收与 updateScene 逻辑。
        风扇颜色仍由宿舍状态决定，命令只强制运转、不改颜色。 */
     var fanOverrideUntil = 0;
+
+    // 任务 D4：节点离线检测状态（只跟踪当前选中的宿舍）
+    var offlineFlag = false;
 
     function handleFanCommand(topic, payloadBuffer) {
         var matched = topic.match(FAN_TOPIC_RE);
@@ -1018,6 +1025,29 @@
     /* =========================================================
        14. 启动
        ========================================================= */
+    /* 任务 D4：节点离线检测
+       检查当前选中宿舍是否超过 OFFLINE_MS 未更新，只在状态翻转时记一次日志。
+       场景渲染与 env 消息处理逻辑不受影响。 */
+    setInterval(function () {
+        var cached = nodeCache[currentNode];
+        if (!cached || !cached.lastUpdate) return;
+
+        var offline = (Date.now() - cached.lastUpdate) > OFFLINE_MS;
+        if (offline === offlineFlag) return;
+        offlineFlag = offline;
+
+        if (offline) {
+            hudTime.textContent = '节点离线';
+            hudTime.style.color = '#f87171';
+            log('error', currentNode + ' 节点离线：超过 ' +
+                (OFFLINE_MS / 1000) + ' 秒未收到数据');
+        } else {
+            hudTime.style.color = '';
+            hudTime.textContent = cached.data.time || nowTime();
+            log('ok', currentNode + ' 节点恢复在线');
+        }
+    }, 1000);
+
     selectNode('dorm-a');
     log('info', '3D 宿舍场景已加载（PBR 哑光材质 + 实时阴影）');
     log('info', '房间：地板 / 天花板 / 三面墙 / 带窗正面墙 / 踢脚线 / 门');
