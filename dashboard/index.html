@@ -262,6 +262,61 @@
     .event-table tr.ongoing td { background: #fffbeb; }
     .event-table .empty { color: var(--muted); text-align: center; padding: 14px; }
 
+    /* ===== 任务 B：当前情况与判断依据 ===== */
+    .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+    .panel-head h2 { font-size: 15px; margin: 0; }
+
+    .situation {
+        font-size: 14px;
+        line-height: 1.9;
+        padding: 12px 14px;
+        background: #f8fafc;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: #334155;
+    }
+    .situation .ok { color: var(--ok); font-weight: bold; }
+    .situation .warn-text { color: var(--bad); font-weight: bold; }
+
+    .rank-list { margin-top: 14px; }
+    .rank-item {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        padding: 9px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        font-size: 13px;
+    }
+    .rank-item.top { border-color: #f59e0b; background: #fffbeb; }
+    .rank-no {
+        width: 22px; height: 22px;
+        border-radius: 50%;
+        background: #94a3b8;
+        color: #fff;
+        font-size: 12px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+    }
+    .rank-item.top .rank-no { background: #f59e0b; }
+    .rank-node { font-weight: bold; min-width: 74px; }
+    .rank-type { min-width: 46px; }
+    .rank-dur, .rank-count { color: var(--muted); }
+    .rank-basis { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .rank-empty { color: var(--muted); font-size: 13px; padding: 4px 2px; }
+
     #toast {
         position: fixed;
         left: 50%;
@@ -299,6 +354,15 @@
         <button class="toolbar-btn" id="exportEventsBtn">导出事件日志</button>
         <span class="event-count" id="eventCount">已记录 0 条事件</span>
     </div>
+</div>
+
+<div class="panel">
+    <div class="panel-head">
+        <h2>当前情况</h2>
+        <button class="toolbar-btn" id="ttsBtn">播放语音提醒</button>
+    </div>
+    <div class="situation" id="situationText">等待数据…</div>
+    <div class="rank-list" id="rankList"></div>
 </div>
 
 <div class="cards" id="cards"></div>
@@ -393,6 +457,9 @@
     var eventTableEl = document.getElementById('eventTable');
     var exportBtn = document.getElementById('exportEventsBtn');
     var toastEl = document.getElementById('toast');
+    var situationEl = document.getElementById('situationText');
+    var rankListEl = document.getElementById('rankList');
+    var ttsBtn = document.getElementById('ttsBtn');
 
     // ---------- 通用工具 ----------
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
@@ -675,6 +742,150 @@
         showToast('已导出 events.csv（' + rows.length + ' 条）');
     }
 
+    /* =========================================================
+       任务 B：当前情况描述（B1）、判断依据排名（B2）、语音提醒（B4）
+       所有文字均由实时数据拼装，没有写死的句子
+       ========================================================= */
+
+    // 按优先级排序的异常宿舍（时长优先，时长相同比次数）—— B1/B2/TTS 共用
+    function buildRankItems() {
+        var items = [];
+        NODES.forEach(function (id) {
+            var t = taskA[id];
+            if (!t.episode) return;
+            items.push({
+                node: id,
+                type: t.episode.type,
+                durationSec: Math.floor((Date.now() - t.episode.startTs) / 1000),
+                count: t.anomalyCount,
+                phase: t.phase
+            });
+        });
+        items.sort(function (a, b) {
+            if (b.durationSec !== a.durationSec) return b.durationSec - a.durationSec;
+            return b.count - a.count;
+        });
+        return items;
+    }
+
+    /* ---- B1：一句话说清"当前发生的情况" ---- */
+    function renderSituation() {
+        var withData = NODES.filter(function (id) { return state[id].status !== ''; });
+        if (!withData.length) {
+            situationEl.textContent = '等待数据…';
+            return;
+        }
+
+        var abnormal = withData.filter(function (id) { return taskA[id].episode; });
+
+        if (!abnormal.length) {
+            var brief = withData.map(function (id) {
+                var s = state[id];
+                return NODE_LABEL[id] + ' ' + s.temperature.toFixed(1) + '℃ / ' +
+                    s.humidity.toFixed(1) + '%';
+            }).join('　');
+            situationEl.innerHTML = '<span class="ok">三个宿舍环境均正常，无需关注。</span>　' +
+                escapeHtml(brief);
+            return;
+        }
+
+        var parts = abnormal.map(function (id) {
+            var t = taskA[id];
+            var s = state[id];
+            var metric = t.episode.type === '偏湿'
+                ? s.humidity.toFixed(1) + '%'
+                : s.temperature.toFixed(1) + '℃';
+            return '<span class="warn-text">' + NODE_LABEL[id] + '</span> ' +
+                escapeHtml(t.episode.type) + '（' + metric + '），已持续 ' +
+                fmtDuration(Date.now() - t.episode.startTs) +
+                '，今日第 ' + t.anomalyCount + ' 次，当前' + PHASE_LABEL[t.phase];
+        });
+
+        var normalIds = withData.filter(function (id) { return !taskA[id].episode; });
+        var tail = normalIds.length
+            ? '　' + normalIds.map(function (id) { return NODE_LABEL[id]; }).join('、') + ' 正常。'
+            : '';
+
+        situationEl.innerHTML = '当前有 ' + abnormal.length + ' 个宿舍处于异常：' +
+            parts.join('；') + '。' + tail;
+    }
+
+    /* ---- B2：优先宿舍的判断依据（时长 / 次数）---- */
+    function renderRank() {
+        var items = buildRankItems();
+        if (!items.length) {
+            rankListEl.innerHTML = '<div class="rank-empty">当前没有需要排序的异常宿舍</div>';
+            return;
+        }
+
+        var html = '';
+        items.forEach(function (it, i) {
+            var tied = items.filter(function (o) { return o.durationSec === it.durationSec; }).length > 1;
+            var basis;
+            if (i === 0) {
+                basis = '判断依据：持续 ' + fmtDuration(it.durationSec * 1000) +
+                    (tied ? '（并列最长）' : '（最长）') + '，异常 ' + it.count + ' 次' +
+                    (tied ? '（并列时取次数多者）' : '');
+            } else {
+                basis = '持续 ' + fmtDuration(it.durationSec * 1000) + '，异常 ' + it.count + ' 次';
+            }
+            html += '<div class="rank-item' + (i === 0 ? ' top' : '') + '">' +
+                '<span class="rank-no">' + (i + 1) + '</span>' +
+                '<span class="rank-node">' + NODE_LABEL[it.node] + '</span>' +
+                '<span class="rank-type">' + escapeHtml(it.type) + '</span>' +
+                '<span class="rank-dur">异常持续 ' + fmtDuration(it.durationSec * 1000) + '</span>' +
+                '<span class="rank-count">异常 ' + it.count + ' 次</span>' +
+                '<span class="rank-basis">' + escapeHtml(basis) + '　' + PHASE_LABEL[it.phase] + '</span>' +
+                '</div>';
+        });
+        rankListEl.innerHTML = html;
+    }
+
+    /* ---- B4：语音提醒只朗读"当前提醒"，文案同样由数据自动生成 ---- */
+    function buildReminderSpeech() {
+        var items = buildRankItems();
+        if (!items.length) {
+            return '三个宿舍环境均正常，无需关注。';
+        }
+
+        var top = items[0];
+        var mins = Math.floor(top.durationSec / 60);
+        var secs = top.durationSec % 60;
+        var durText = mins > 0 ? mins + ' 分 ' + secs + ' 秒' : secs + ' 秒';
+
+        var text = '当前最需要关注的宿舍是' + NODE_LABEL[top.node] + '：' + top.type +
+            '，已持续 ' + durText + '，这是今日第 ' + top.count + ' 次异常。';
+
+        var others = items.slice(1);
+        if (others.length) {
+            text += others.map(function (o) {
+                var m = Math.floor(o.durationSec / 60);
+                return NODE_LABEL[o.node] + ' ' + o.type + '，已持续 ' +
+                    (m > 0 ? m + ' 分钟' : o.durationSec + ' 秒');
+            }).join('；') + '。';
+        }
+
+        var normalIds = NODES.filter(function (id) { return !taskA[id].episode; });
+        if (normalIds.length) {
+            text += normalIds.map(function (id) { return NODE_LABEL[id]; }).join('、') + ' 正常。';
+        }
+        return text;
+    }
+
+    function speakReminder() {
+        if (!('speechSynthesis' in window)) {
+            showToast('当前浏览器不支持语音合成');
+            return;
+        }
+        var text = buildReminderSpeech();
+        var utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+        log('info', '语音提醒：' + text);
+        showToast('正在朗读当前提醒');
+    }
+
     // ---------- 卡片渲染 ----------
     function buildCards() {
         NODES.forEach(function (id) {
@@ -889,6 +1100,8 @@
         renderCard(nodeId);
         recomputePriority();
         renderEvents();
+        renderSituation();
+        renderRank();
         checkStale();
         refreshChart();
     }
@@ -1000,13 +1213,18 @@
     NODES.forEach(renderCard);
     recomputePriority();
     renderEvents();
+    renderSituation();
+    renderRank();
     exportBtn.addEventListener('click', exportEvents);
+    ttsBtn.addEventListener('click', speakReminder);
 
     // 每秒刷新：异常持续时间随钟表增长，没有新数据时也要更新显示
     setInterval(function () {
         checkStale();
         recomputePriority();
         renderEvents();
+        renderSituation();
+        renderRank();
         NODES.forEach(renderCard);
     }, 1000);
 
