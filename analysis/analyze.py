@@ -1,4 +1,8 @@
 print("我的Python脚本运行了！")
+import csv
+import html
+import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -110,6 +114,44 @@ for index, row in attention_records.iterrows():
 
 html_content += """
     </table>
+"""
+
+# 6. 任务 A：读取 Dashboard 导出的 events.csv，生成"事件复盘"表
+#    （沿用现有 CSV → report.html 管线：Dashboard 导出 → 放到本目录 → 重新运行本脚本）
+EVENT_COLUMNS = ['宿舍名称', '异常开始时间', '异常类型',
+                 '优先原因', '用户操作', '恢复时间', '最终结果']
+events_path = 'events.csv'
+
+if os.path.exists(events_path):
+    with open(events_path, encoding='utf-8-sig', newline='') as f:
+        event_rows = list(csv.DictReader(f))
+
+    rows_html = ''
+    for row in event_rows:
+        cells = ''.join(
+            f'<td>{html.escape(str(row.get(col, "")))}</td>' for col in EVENT_COLUMNS
+        )
+        rows_html += f'<tr>{cells}</tr>'
+
+    header_html = ''.join(f'<th>{col}</th>' for col in EVENT_COLUMNS)
+    html_content += f"""
+    <h2>事件复盘（任务 A）</h2>
+    <p>共 {len(event_rows)} 条事件记录，来自 Dashboard 导出的 events.csv。</p>
+    <table>
+        <tr>{header_html}</tr>
+        {rows_html}
+    </table>
+    """
+    print(f"已合并 {len(event_rows)} 条事件记录到报告")
+else:
+    html_content += """
+    <h2>事件复盘（任务 A）</h2>
+    <p>暂无事件记录：请在 Dashboard 点击「导出事件日志」，
+    将 events.csv 放到本目录后重新运行本脚本。</p>
+    """
+    print("未找到 events.csv，事件复盘表显示为空提示")
+
+html_content += """
 </body>
 </html>
 """

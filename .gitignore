@@ -1,6 +1,9 @@
 # MQTT 节点历史数据（由服务端在运行时持续追加，不适合纳入版本控制）
 node_readings_history.csv
 
+# 任务 A：Dashboard 导出的事件日志（运行时数据，每次导出都会变化）
+events.csv
+
 # Python
 __pycache__/
 *.pyc

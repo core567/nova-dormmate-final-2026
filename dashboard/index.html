@@ -176,6 +176,110 @@
     .log-warn .log-msg { color: #fbbf24; }
     .log-error .log-msg { color: #f87171; }
     .log-ok .log-msg { color: #4ade80; }
+
+    /* ===== 任务 A：异常优先级与处置 ===== */
+    .priority-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-left: 5px solid var(--warn);
+        border-radius: 10px;
+        padding: 16px 18px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+    .priority-panel.none { border-left-color: var(--ok); }
+    .priority-main { flex: 1; min-width: 280px; }
+    .priority-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .priority-node { font-size: 20px; font-weight: bold; }
+    .priority-reason { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+    .priority-side { text-align: right; }
+    .event-count { display: block; font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+    .toolbar-btn {
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: bold;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        color: #334155;
+        cursor: pointer;
+    }
+    .toolbar-btn:hover { background: #e0f2fe; border-color: #38bdf8; color: #0369a1; }
+
+    .phase-chip {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: bold;
+        color: #fff;
+        background: #94a3b8;
+    }
+    .phase-chip[data-phase="attention"] { background: #f59e0b; }
+    .phase-chip[data-phase="handling"]  { background: #2563eb; }
+    .phase-chip[data-phase="recovered"] { background: #16a34a; }
+
+    .task-a-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+    }
+
+    .fan-btn {
+        margin-top: 10px;
+        width: 100%;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        color: #334155;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: bold;
+        cursor: pointer;
+    }
+    .fan-btn:not(:disabled):hover { background: #e0f2fe; border-color: #38bdf8; color: #0369a1; }
+    .fan-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .event-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .event-table th, .event-table td {
+        border: 1px solid var(--border);
+        padding: 6px 9px;
+        text-align: left;
+        vertical-align: top;
+    }
+    .event-table th { background: #f1f5f9; color: #475569; white-space: nowrap; }
+    .event-table tr.ongoing td { background: #fffbeb; }
+    .event-table .empty { color: var(--muted); text-align: center; padding: 14px; }
+
+    #toast {
+        position: fixed;
+        left: 50%;
+        bottom: 40px;
+        transform: translate(-50%, 20px);
+        background: #1e293b;
+        color: #f8fafc;
+        padding: 12px 24px;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: bold;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, .3);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .25s, transform .25s;
+        z-index: 100;
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
 </style>
 </head>
 <body>
@@ -184,6 +288,18 @@
     <h1>DormMate 实时 Dashboard <small>MQTT · ws://127.0.0.1:8083/mqtt</small></h1>
     <div class="banner warn" id="banner">正在连接 Broker…</div>
 </header>
+
+<div class="priority-panel none" id="priorityPanel">
+    <div class="priority-main">
+        <div class="priority-label">当前最需要关注的宿舍</div>
+        <div class="priority-node" id="priorityNode">当前无异常宿舍</div>
+        <div class="priority-reason" id="priorityReason">三个宿舍均处于正常状态</div>
+    </div>
+    <div class="priority-side">
+        <button class="toolbar-btn" id="exportEventsBtn">导出事件日志</button>
+        <span class="event-count" id="eventCount">已记录 0 条事件</span>
+    </div>
+</div>
 
 <div class="cards" id="cards"></div>
 
@@ -199,6 +315,16 @@
     </div>
     <div class="log" id="log"></div>
 </div>
+
+<div class="panel">
+    <div class="log-head">
+        <h2>事件记录（任务 A）</h2>
+        <span>最近 5 条 · 完整复盘见 analysis/report.html</span>
+    </div>
+    <table class="event-table" id="eventTable"></table>
+</div>
+
+<div id="toast"></div>
 
 <script>
 (function () {
@@ -230,10 +356,43 @@
     var currentView = 'all';
     var chart = null;
 
+    /* ===== 任务 A：异常优先级、处置状态机、事件日志 ===== */
+    var PHASE_LABEL = {
+        normal: '正常',
+        attention: '仍需关注',
+        handling: '处理中',
+        recovered: '已恢复'
+    };
+    var EVENTS_KEY = 'dormmate_taskA_events';
+
+    // 每个宿舍的处置状态：phase 是状态机当前态，episode 是进行中的异常段
+    var taskA = {};
+    NODES.forEach(function (id) {
+        taskA[id] = {
+            phase: 'normal',
+            episode: null,
+            anomalyCount: 0,
+            newDataSinceAction: 0
+        };
+    });
+
+    // 已完成的异常事件，持久化到 localStorage，刷新页面不丢
+    var events = loadEvents();
+    var priorityNode = null;
+    var toastTimer = null;
+    var mqttClient = null;
+
     var cardsEl = document.getElementById('cards');
     var tabsEl = document.getElementById('tabs');
     var logEl = document.getElementById('log');
     var bannerEl = document.getElementById('banner');
+    var priorityPanelEl = document.getElementById('priorityPanel');
+    var priorityNodeEl = document.getElementById('priorityNode');
+    var priorityReasonEl = document.getElementById('priorityReason');
+    var eventCountEl = document.getElementById('eventCount');
+    var eventTableEl = document.getElementById('eventTable');
+    var exportBtn = document.getElementById('exportEventsBtn');
+    var toastEl = document.getElementById('toast');
 
     // ---------- 通用工具 ----------
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
@@ -278,6 +437,244 @@
         bannerEl.textContent = text;
     }
 
+    /* =========================================================
+       任务 A：异常优先级判断 + 处置状态机 + 事件日志
+       ========================================================= */
+
+    function nowStamp() {
+        var d = new Date();
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+            ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function fmtDuration(ms) {
+        var total = Math.floor(ms / 1000);
+        return pad(Math.floor(total / 60)) + ':' + pad(total % 60);
+    }
+
+    function loadEvents() {
+        try {
+            var raw = window.localStorage.getItem(EVENTS_KEY);
+            var parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+            return [];
+        }
+    }
+
+    function saveEvents() {
+        try {
+            window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
+        } catch (err) {
+            log('warn', '事件日志写入 localStorage 失败：' + err.message);
+        }
+    }
+
+    function showToast(text) {
+        toastEl.textContent = text;
+        toastEl.classList.add('show');
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3200);
+    }
+
+    /* ---- A1：优先级判断（先比异常持续时间，长的优先；时长相同则比异常次数）---- */
+    function recomputePriority() {
+        var candidates = [];
+        NODES.forEach(function (id) {
+            var t = taskA[id];
+            if (!t.episode) return;
+            candidates.push({
+                node: id,
+                // 按秒取整：让几乎同时开始的异常段有机会触发"次数破平"规则
+                durationSec: Math.floor((Date.now() - t.episode.startTs) / 1000),
+                count: t.anomalyCount
+            });
+        });
+
+        if (!candidates.length) {
+            priorityNode = null;
+            priorityPanelEl.className = 'priority-panel none';
+            priorityNodeEl.textContent = '当前无异常宿舍';
+            priorityReasonEl.textContent = '三个宿舍均处于正常状态';
+            return;
+        }
+
+        candidates.sort(function (a, b) {
+            if (b.durationSec !== a.durationSec) return b.durationSec - a.durationSec;
+            return b.count - a.count;
+        });
+
+        var top = candidates[0];
+        var tied = candidates.filter(function (c) { return c.durationSec === top.durationSec; }).length;
+
+        var reason = '优先原因：异常持续 ' + fmtDuration(top.durationSec * 1000) +
+            (tied > 1 ? '（并列最长）' : '（最长）') +
+            '，异常 ' + top.count + ' 次' +
+            (tied > 1 ? '（时长并列，取次数多者）' : '');
+
+        priorityNode = top.node;
+        priorityPanelEl.className = 'priority-panel';
+        priorityNodeEl.textContent = NODE_LABEL[top.node] + '（' + top.node + '）';
+        priorityReasonEl.textContent = reason + '　当前状态：' + PHASE_LABEL[taskA[top.node].phase];
+
+        taskA[top.node].episode.priorityReason = reason;
+    }
+
+    /* ---- A3：状态机完全由 MQTT 新数据驱动，点击按钮绝不直接判恢复 ---- */
+    function taskAOnData(nodeId, status, timeStr) {
+        var t = taskA[nodeId];
+        var stamp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timeStr || '')
+            ? timeStr : nowStamp();
+
+        if (status === '正常') {
+            if (t.episode) {
+                var ep = t.episode;
+                events.push({
+                    node: nodeId,
+                    startTime: ep.startTime,
+                    type: ep.type,
+                    priorityReason: ep.priorityReason || '—',
+                    userAction: ep.fanActionTime ? ('开启风扇 ' + ep.fanActionTime) : '无',
+                    recoverTime: stamp,
+                    result: '已恢复'
+                });
+                saveEvents();
+                log('ok', nodeId + ' 数据恢复正常，事件已记录（' +
+                    (ep.fanActionTime ? '期间开启过风扇' : '未人工干预') + '）');
+                t.episode = null;
+            }
+            t.phase = 'recovered';
+            t.newDataSinceAction = 0;
+            return;
+        }
+
+        if (!t.episode) {
+            t.episode = {
+                startTs: Date.now(),
+                startTime: stamp,
+                type: status,
+                fanActionTime: null,
+                priorityReason: '—'
+            };
+            t.anomalyCount += 1;
+            t.phase = 'attention';
+            t.newDataSinceAction = 0;
+            log('warn', nodeId + ' 出现异常：' + status + '（累计第 ' + t.anomalyCount + ' 次）');
+        } else {
+            t.episode.type = status;              // 异常类型变化，持续时间连续计算
+            if (t.phase === 'handling') {
+                t.newDataSinceAction += 1;        // 处理中持续收到新数据
+            } else {
+                t.phase = 'attention';
+            }
+        }
+    }
+
+    /* ---- A2：开启风扇（只把状态推到"处理中"，恢复仍由数据决定）---- */
+    function startFan(nodeId) {
+        var t = taskA[nodeId];
+        if (!t.episode || t.phase !== 'attention') {
+            showToast('当前状态不允许开启风扇');
+            return;
+        }
+
+        var st = nowTime();
+        t.episode.fanActionTime = st;
+        t.phase = 'handling';
+        t.newDataSinceAction = 0;
+
+        if (mqttClient && mqttClient.connected) {
+            mqttClient.publish('dormmate/' + nodeId + '/fan',
+                JSON.stringify({ nodeId: nodeId, command: 'on', time: nowStamp() }));
+            log('ok', nodeId + ' 已下发开启风扇命令 → dormmate/' + nodeId + '/fan');
+        } else {
+            log('error', nodeId + ' 开启风扇失败：MQTT 未连接');
+        }
+
+        showToast('处理中，风扇已开启（' + NODE_LABEL[nodeId] + '）');
+        renderCard(nodeId);
+        renderEvents();
+        recomputePriority();
+    }
+
+    /* ---- A4：事件明细（已完成的 + 进行中的）---- */
+    var EVENT_HEADERS = ['宿舍名称', '异常开始时间', '异常类型', '优先原因', '用户操作', '恢复时间', '最终结果'];
+
+    function currentEventRows() {
+        var rows = events.slice();
+        NODES.forEach(function (id) {
+            var t = taskA[id];
+            if (!t.episode) return;
+            rows.push({
+                node: id,
+                startTime: t.episode.startTime,
+                type: t.episode.type,
+                priorityReason: t.episode.priorityReason || '—',
+                userAction: t.episode.fanActionTime ? ('开启风扇 ' + t.episode.fanActionTime) : '无',
+                recoverTime: '—',
+                result: t.phase === 'handling' ? '处理中未恢复' : '仍需关注未处理',
+                ongoing: true,
+                newData: t.newDataSinceAction
+            });
+        });
+        return rows;
+    }
+
+    function renderEvents() {
+        var rows = currentEventRows();
+        eventCountEl.textContent = '已记录 ' + rows.length + ' 条事件';
+
+        var html = '<tr>' + EVENT_HEADERS.map(function (h) {
+            return '<th>' + escapeHtml(h) + '</th>';
+        }).join('') + '</tr>';
+
+        if (!rows.length) {
+            html += '<tr><td class="empty" colspan="' + EVENT_HEADERS.length + '">暂无事件记录</td></tr>';
+        } else {
+            rows.slice(-5).reverse().forEach(function (r) {
+                var result = r.result;
+                if (r.ongoing && r.newData) result += '（已收到 ' + r.newData + ' 组新数据）';
+                html += '<tr' + (r.ongoing ? ' class="ongoing"' : '') + '>' +
+                    '<td>' + escapeHtml(r.node) + '</td>' +
+                    '<td>' + escapeHtml(r.startTime) + '</td>' +
+                    '<td>' + escapeHtml(r.type) + '</td>' +
+                    '<td>' + escapeHtml(r.priorityReason) + '</td>' +
+                    '<td>' + escapeHtml(r.userAction) + '</td>' +
+                    '<td>' + escapeHtml(r.recoverTime) + '</td>' +
+                    '<td>' + escapeHtml(result) + '</td></tr>';
+            });
+        }
+        eventTableEl.innerHTML = html;
+    }
+
+    function csvCell(value) {
+        var s = String(value == null ? '' : value);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    function exportEvents() {
+        var rows = currentEventRows();
+        if (!rows.length) {
+            showToast('暂无事件记录可导出');
+            return;
+        }
+        var csv = EVENT_HEADERS.join(',') + '\n';
+        rows.forEach(function (r) {
+            csv += [r.node, r.startTime, r.type, r.priorityReason,
+                    r.userAction, r.recoverTime, r.result].map(csvCell).join(',') + '\n';
+        });
+
+        var blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'events.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        log('info', '已导出事件日志 events.csv（' + rows.length + ' 条）');
+        showToast('已导出 events.csv（' + rows.length + ' 条）');
+    }
+
     // ---------- 卡片渲染 ----------
     function buildCards() {
         NODES.forEach(function (id) {
@@ -293,8 +690,15 @@
                 '<span class="value humid">--</span><span class="unit">%</span></div>' +
                 '<div class="status-line"><span class="badge status">等待数据</span>' +
                 '<span class="stale-tag">数据超时</span></div>' +
-                '<div class="card-time">最后更新：--</div>';
+                '<div class="card-time">最后更新：--</div>' +
+                '<div class="task-a-line"><span class="phase-chip" data-phase="normal">正常</span>' +
+                '<span class="anomaly-info">累计异常 0 次</span></div>' +
+                '<button class="fan-btn" disabled>开启风扇</button>';
             card.addEventListener('click', function () { switchView(id); });
+            card.querySelector('.fan-btn').addEventListener('click', function (e) {
+                e.stopPropagation();   // 不要连带触发卡片的"切换视图"
+                startFan(id);
+            });
             cardsEl.appendChild(card);
         });
     }
@@ -312,6 +716,27 @@
         card.querySelector('.humid').textContent = s.humidity === null ? '--' : s.humidity.toFixed(1);
         card.querySelector('.card-time').textContent = '最后更新：' +
             (s.lastUpdate ? new Date(s.lastUpdate).toTimeString().slice(0, 8) : '--');
+
+        // ---- 任务 A：处置状态与风扇按钮 ----
+        var t = taskA[id];
+        var chip = card.querySelector('.phase-chip');
+        chip.setAttribute('data-phase', t.phase);
+        chip.textContent = PHASE_LABEL[t.phase];
+
+        var info = card.querySelector('.anomaly-info');
+        if (t.episode) {
+            info.textContent = '异常持续 ' + fmtDuration(Date.now() - t.episode.startTs) +
+                ' · 累计 ' + t.anomalyCount + ' 次' +
+                (t.phase === 'handling' ? ' · 新数据 ' + t.newDataSinceAction + ' 组' : '');
+        } else {
+            info.textContent = '累计异常 ' + t.anomalyCount + ' 次';
+        }
+
+        var btn = card.querySelector('.fan-btn');
+        btn.disabled = t.phase !== 'attention';
+        btn.textContent = t.phase === 'handling' ? '风扇已开启（处理中）'
+            : (t.phase === 'recovered' ? '已恢复' : '开启风扇');
+
         card.classList.toggle('active', currentView === id);
     }
 
@@ -459,7 +884,11 @@
             s.hum.shift();
         }
 
+        // 任务 A：先按新数据推进状态机，再渲染（卡片状态依赖 taskA）
+        taskAOnData(nodeId, status, timeStr);
         renderCard(nodeId);
+        recomputePriority();
+        renderEvents();
         checkStale();
         refreshChart();
     }
@@ -522,6 +951,7 @@
             keepalive: 60,
             clean: true
         });
+        mqttClient = client;   // 供"开启风扇"按钮发布命令使用
 
         client.on('connect', function () {
             setBanner('ok', '已连接 Broker');
@@ -567,8 +997,21 @@
     buildCards();
     buildTabs();
     switchView('all');
-    setInterval(checkStale, 1000);
+    NODES.forEach(renderCard);
+    recomputePriority();
+    renderEvents();
+    exportBtn.addEventListener('click', exportEvents);
+
+    // 每秒刷新：异常持续时间随钟表增长，没有新数据时也要更新显示
+    setInterval(function () {
+        checkStale();
+        recomputePriority();
+        renderEvents();
+        NODES.forEach(renderCard);
+    }, 1000);
+
     log('info', '页面已加载，开始连接 Broker…');
+    log('info', '任务 A：异常优先级判断 / 开启风扇闭环 / 事件日志 已启用');
     connect();
 })();
 </script>

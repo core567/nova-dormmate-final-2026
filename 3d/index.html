@@ -212,6 +212,8 @@
     var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
     var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
     var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
+    var FAN_TOPIC_RE = /^dormmate\/([^/]+)\/fan$/;
+    var FAN_OVERRIDE_MS = 30000;   // 手动开启风扇后强制运转的时长
     var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
 
     var ROOM = { w: 6, h: 3.1, d: 4 };            // 房间尺寸（米）
@@ -770,8 +772,11 @@
         var dt = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.1) : 0.016;
         lastFrameTime = now;
 
-        // 转速缓动：偏热时平滑加速，恢复时平滑停转
-        anim.fanSpeed = lerp(anim.fanSpeed, target.fanSpeed, 1 - Math.pow(0.001, dt));
+        // 转速缓动：偏热时平滑加速，恢复时平滑停转；
+        // 手动开启风扇期间强制运转（不改颜色，颜色仍由宿舍状态决定）
+        var fanOverride = Date.now() < fanOverrideUntil;
+        var fanGoal = fanOverride ? Math.max(target.fanSpeed, 0.45) : target.fanSpeed;
+        anim.fanSpeed = lerp(anim.fanSpeed, fanGoal, 1 - Math.pow(0.001, dt));
         bladeGroup.rotation.z += anim.fanSpeed * dt * 12;
 
         var k = 1 - Math.pow(0.002, dt);
@@ -781,7 +786,8 @@
         matFan.color.copy(anim.fanColor);
         lampMat.color.copy(anim.lampColor);
 
-        hudFan.textContent = (anim.fanSpeed * 12).toFixed(2) + ' rad/s';
+        hudFan.textContent = (anim.fanSpeed * 12).toFixed(2) + ' rad/s' +
+            (fanOverride ? '（手动开启）' : '');
 
         controls.update();
         renderer.render(scene, camera);
@@ -900,6 +906,43 @@
         }
     }
 
+    /* ---------- 任务 A 新增：手动开启风扇命令 ----------
+       Topic: dormmate/<nodeId>/fan   Payload: {"nodeId":..,"command":"on"}
+       仅新增处理分支，不影响上方 env 消息的接收与 updateScene 逻辑。
+       风扇颜色仍由宿舍状态决定，命令只强制运转、不改颜色。 */
+    var fanOverrideUntil = 0;
+
+    function handleFanCommand(topic, payloadBuffer) {
+        var matched = topic.match(FAN_TOPIC_RE);
+        if (!matched) return;
+
+        var nodeId = matched[1];
+        if (NODES.indexOf(nodeId) === -1) {
+            log('error', '风扇命令：未知节点，已忽略 | ' + topic);
+            return;
+        }
+
+        var command;
+        try {
+            command = JSON.parse(payloadBuffer.toString());
+        } catch (err) {
+            log('error', '风扇命令：不是合法 JSON，已忽略 | ' + payloadBuffer.toString().slice(0, 40));
+            return;
+        }
+        if (!command || command.command !== 'on') {
+            log('warn', '风扇命令：未知指令，已忽略 | ' + topic);
+            return;
+        }
+
+        if (nodeId !== currentNode) {
+            log('info', '风扇命令：' + nodeId + ' 非当前宿舍，已忽略');
+            return;
+        }
+
+        fanOverrideUntil = Date.now() + FAN_OVERRIDE_MS;
+        log('ok', '收到手动开启风扇命令，风扇将运转 ' + (FAN_OVERRIDE_MS / 1000) + ' 秒');
+    }
+
     /* =========================================================
        13. MQTT 连接与断开
        ========================================================= */
@@ -934,6 +977,11 @@
 
         client.on('message', function (topic, message) {
             try {
+                // 任务 A 新增分支：风扇控制命令；其余消息仍走原有 env 处理逻辑
+                if (FAN_TOPIC_RE.test(topic)) {
+                    handleFanCommand(topic, message);
+                    return;
+                }
                 handleMessage(topic, message);
             } catch (err) {
                 log('error', '处理消息时出错（已捕获）：' + err.message);
