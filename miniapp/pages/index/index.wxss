@@ -51,8 +51,24 @@ page {
 .card-head {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   margin-bottom: 16rpx;
+}
+
+/* 任务 E3：设为重点宿舍（会广播给 Web 与 3D） */
+.focus-btn {
+  margin: 0;
+  padding: 4rpx 18rpx;
+  font-size: 22rpx;
+  line-height: 1.8;
+  background: #f1f5f9;
+  color: #475569;
+  border-radius: 999rpx;
+}
+.focus-btn.focused {
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: bold;
 }
 .name { font-size: 30rpx; font-weight: bold; color: #1e293b; }
 .node-id { font-size: 22rpx; color: #94a3b8; }

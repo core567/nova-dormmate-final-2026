@@ -13,8 +13,14 @@
   <view class="cards">
     <view class="card" wx:for="{{nodes}}" wx:key="id">
       <view class="card-head">
-        <text class="name">{{item.label}}</text>
-        <text class="node-id">{{item.id}}</text>
+        <view>
+          <text class="name">{{item.label}}</text>
+          <text class="node-id">{{item.id}}</text>
+        </view>
+        <button class="focus-btn {{item.isFocus ? 'focused' : ''}}" size="mini"
+                data-node="{{item.id}}" bindtap="onSetFocus">
+          {{item.isFocus ? '★ 重点' : '设为重点'}}
+        </button>
       </view>
 
       <view class="metrics">

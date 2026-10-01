@@ -25,7 +25,9 @@ const STATUS_CLASS = {
 };
 const OFFLINE_MS = 10000;   // 任务 D4：超过该时长未收到数据即判定节点离线
 
-/** 固定阈值规则：与 web / dashboard / 3d / publisher / analyze 保持一致 */
+/** 固定阈值规则：与 web / dashboard / 3d / publisher / analyze 保持一致。
+ *  任务 E3：status 由后端 Publisher 统一计算，小程序正常路径直接使用后端值；
+ *  此处仅在字段缺失/非法时兜底（保留 D 模块的容错验收）。 */
 function calcStatus(temperature, humidity) {
   if (temperature < 18) return '偏冷';
   if (temperature >= 30) return '偏热';
@@ -59,6 +61,7 @@ Page({
     priorityReason: '三个宿舍环境均正常',
     nodes: [],
     recentEvents: [],
+    focusNode: '',          // 任务 E3：被设为重点的宿舍，会广播给 Web / 3D
     manualOpen: false,
     // M4 手动分析（字段名加 manual 前缀，避免与实时状态冲突）
     temperature: '',
@@ -313,6 +316,7 @@ Page({
         phaseClass: PHASE_CLASS[s.phase],
         episodeText: episodeText,
         offline: offline,
+        isFocus: this.data.focusNode === id,   // 任务 E3：重点宿舍标记
         canFan: s.phase === 'open'
       };
     });
@@ -351,6 +355,30 @@ Page({
     }
 
     wx.showToast({ title: '处理中，风扇已开启', icon: 'none' });
+    this._refresh();
+  },
+
+  /**
+   * 任务 E3：把某个宿舍设为重点，并广播给 Web Dashboard 与 3D 页面。
+   * 走 MQTT 的 dormmate/focus 主题，其他端订阅后同步切换选中节点。
+   */
+  onSetFocus(e) {
+    const nodeId = e.currentTarget.dataset.node;
+    if (NODES.indexOf(nodeId) === -1) return;
+
+    this.setData({ focusNode: nodeId });
+
+    if (this._client && this._client.isConnected()) {
+      this._client.publish('dormmate/focus', JSON.stringify({
+        nodeId: nodeId,
+        source: 'miniapp',
+        time: nowStamp()
+      }));
+      wx.showToast({ title: NODE_LABEL[nodeId] + ' 已设为重点', icon: 'none' });
+    } else {
+      wx.showToast({ title: 'MQTT 未连接，未能广播', icon: 'none' });
+    }
+
     this._refresh();
   },
 

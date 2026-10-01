@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DormMate 语音交互与现场快照（E2）</title>
+<!--
+  任务 E2：ASR 语音指令 + TTS 朗读 + Camera 现场快照
+  独立页面，不改动 D 模块与 3D 页面。
+
+  打开方式（摄像头与麦克风需要安全上下文）：
+    在项目根目录执行  python -m http.server 8000
+    浏览器访问          http://localhost:8000/e2/index.html
+-->
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        padding: 20px 24px 60px;
+        background: #f1f5f9;
+        color: #1e293b;
+        font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    }
+
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { font-size: 12px; color: #64748b; margin-bottom: 16px; }
+
+    .banner {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 5px 14px; border-radius: 999px;
+        font-size: 13px; font-weight: bold; margin-bottom: 18px;
+    }
+    .banner::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+    .banner.ok   { color: #15803d; background: #dcfce7; }
+    .banner.warn { color: #b45309; background: #fef3c7; }
+    .banner.bad  { color: #b91c1c; background: #fee2e2; }
+
+    .panel {
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
+        padding: 16px 18px; margin-bottom: 16px;
+    }
+    .panel h2 { font-size: 14px; margin: 0 0 12px; color: #475569; }
+
+    button {
+        font-family: inherit; font-size: 13px; font-weight: bold;
+        padding: 8px 16px; border-radius: 8px;
+        border: 1px solid #cbd5e1; background: #f8fafc; color: #334155;
+        cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #e0f2fe; border-color: #38bdf8; color: #0369a1; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+    .card {
+        display: flex; gap: 32px; align-items: baseline;
+        padding: 14px 16px; background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 10px;
+    }
+    .card .node { font-size: 16px; font-weight: bold; }
+    .card .metric { font-size: 13px; color: #64748b; }
+    .card .metric b { font-size: 22px; color: #1e293b; margin: 0 2px; }
+    .card .status {
+        padding: 3px 12px; border-radius: 999px;
+        font-size: 13px; font-weight: bold; color: #fff; background: #94a3b8;
+    }
+    .card .status[data-s="正常"] { background: #16a34a; }
+    .card .status[data-s="偏冷"] { background: #2563eb; }
+    .card .status[data-s="偏热"] { background: #dc2626; }
+    .card .status[data-s="偏湿"] { background: #ea580c; }
+
+    .hint { font-size: 12px; color: #64748b; line-height: 1.8; }
+    .hint code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; color: #0369a1; }
+
+    #asrStatus { font-size: 13px; font-weight: bold; color: #475569; }
+    #asrHeard { font-size: 13px; color: #0369a1; min-height: 20px; }
+
+    #video { width: 320px; border-radius: 10px; background: #0f172a; display: block; margin-top: 12px; }
+    #canvas { display: none; }
+
+    .snap-list { list-style: none; padding: 0; margin: 0; }
+    .snap-list li {
+        padding: 9px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
+        margin-bottom: 8px; font-size: 13px; line-height: 1.6;
+    }
+    .snap-list .sid { font-weight: bold; color: #2563eb; }
+    .snap-list .sdesc { color: #64748b; }
+    .snap-empty { color: #94a3b8; font-size: 13px; }
+
+    #log {
+        height: 140px; overflow-y: auto; background: #0f172a; border-radius: 8px;
+        padding: 10px 12px; font-family: Consolas, "Courier New", monospace;
+        font-size: 12px; line-height: 1.7;
+    }
+    .log-line { display: flex; gap: 10px; }
+    .log-time { color: #64748b; flex: none; }
+    .log-msg { word-break: break-all; color: #cbd5e1; }
+    .log-ok .log-msg { color: #4ade80; }
+    .log-warn .log-msg { color: #fbbf24; }
+    .log-error .log-msg { color: #f87171; }
+</style>
+</head>
+<body>
+
+<h1>DormMate 语音交互与现场快照</h1>
+<div class="sub">任务 E2 · ASR 语音指令 / TTS 朗读 / Camera 快照</div>
+
+<div class="banner warn" id="banner">正在连接 Broker…</div>
+
+<!-- 节点选择 -->
+<div class="panel">
+    <h2>当前选中宿舍</h2>
+    <div class="row">
+        <button class="active" data-node="dorm-a">宿舍 A</button>
+        <button data-node="dorm-b">宿舍 B</button>
+        <button data-node="dorm-c">宿舍 C</button>
+    </div>
+    <div style="margin-top:14px;">
+        <div class="card">
+            <span class="node" id="cardNode">宿舍 A</span>
+            <span class="metric">温度 <b id="cardTemp">--</b> ℃</span>
+            <span class="metric">湿度 <b id="cardHumid">--</b> %</span>
+            <span class="status" id="cardStatus" data-s="">等待数据</span>
+        </div>
+    </div>
+</div>
+
+<!-- 语音交互 -->
+<div class="panel">
+    <h2>语音交互</h2>
+    <div class="row">
+        <button id="asrBtn">🎤 开始语音指令</button>
+        <button id="speakBtn">🔊 朗读状态</button>
+        <button id="cameraBtn">📷 开启摄像头</button>
+        <button id="snapBtn" disabled>📸 拍照并保存快照</button>
+    </div>
+    <div class="row" style="margin-top:12px;">
+        <span id="asrStatus">语音待机</span>
+    </div>
+    <div id="asrHeard">最近识别：—</div>
+    <div class="hint" style="margin-top:12px;">
+        可用语音指令：<code>切换到宿舍A</code> <code>切换到宿舍B</code> <code>切换到宿舍C</code>
+        <code>朗读状态</code> <code>拍照</code><br>
+        语音识别依赖浏览器在线识别服务，若不可用可直接点上方按钮完成同样操作（两者走同一套处理逻辑）。
+    </div>
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+</div>
+
+<!-- 快照记录 -->
+<div class="panel">
+    <h2>现场快照记录（含 nodeId / 时间 / 事件描述）</h2>
+    <ul class="snap-list" id="snapList"></ul>
+    <div class="row" style="margin-top:10px;">
+        <button id="clearSnapBtn">清空记录</button>
+    </div>
+</div>
+
+<!-- 操作日志 -->
+<div class="panel">
+    <h2>操作日志</h2>
+    <div id="log"></div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    /* ============================================================
+       常量
+       ============================================================ */
+    var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+    var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
+    var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
+    var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
+    var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
+    var SNAP_KEY = 'dormmate_e2_snapshots';
+    var MAX_LOG = 60;
+
+    /* ============================================================
+       状态
+       ============================================================ */
+    var currentNode = 'dorm-a';
+    var liveData = {};          // nodeId -> { temperature, humidity, status, time }
+    NODES.forEach(function (id) { liveData[id] = null; });
+
+    var client = null;
+    var stream = null;
+    var recognition = null;
+    var recognizing = false;
+    var snapshots = loadSnapshots();
+
+    /* ============================================================
+       工具
+       ============================================================ */
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+    function nowTime() {
+        var d = new Date();
+        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function formatStamp(d) {
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+            ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function fileStamp(d) {
+        return '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
+            pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    }
+
+    function escapeHtml(text) {
+        return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function log(level, text) {
+        var line = document.createElement('div');
+        line.className = 'log-line log-' + level;
+        line.innerHTML = '<span class="log-time">' + nowTime() + '</span>' +
+                         '<span class="log-msg">' + escapeHtml(text) + '</span>';
+        logEl.insertBefore(line, logEl.firstChild);
+        while (logEl.childNodes.length > MAX_LOG) logEl.removeChild(logEl.lastChild);
+    }
+
+    function setBanner(kind, text) {
+        bannerEl.className = 'banner ' + kind;
+        bannerEl.textContent = text;
+    }
+
+    /* ============================================================
+       DOM
+       ============================================================ */
+    var bannerEl = document.getElementById('banner');
+    var cardNodeEl = document.getElementById('cardNode');
+    var cardTempEl = document.getElementById('cardTemp');
+    var cardHumidEl = document.getElementById('cardHumid');
+    var cardStatusEl = document.getElementById('cardStatus');
+    var asrBtn = document.getElementById('asrBtn');
+    var asrStatusEl = document.getElementById('asrStatus');
+    var asrHeardEl = document.getElementById('asrHeard');
+    var speakBtn = document.getElementById('speakBtn');
+    var cameraBtn = document.getElementById('cameraBtn');
+    var snapBtn = document.getElementById('snapBtn');
+    var video = document.getElementById('video');
+    var canvas = document.getElementById('canvas');
+    var snapListEl = document.getElementById('snapList');
+    var clearSnapBtn = document.getElementById('clearSnapBtn');
+    var logEl = document.getElementById('log');
+    var nodeButtons = document.querySelectorAll('[data-node]');
+
+    /* ============================================================
+       MQTT：订阅三个宿舍的实时数据（与 Dashboard 同样的校验方式）
+       ============================================================ */
+    function connect() {
+        if (client) return;
+        setBanner('warn', '正在连接 Broker…');
+
+        client = mqtt.connect(BROKER_WS, {
+            clientId: 'dormmate-e2-' + Math.random().toString(16).slice(2, 8),
+            connectTimeout: 4000,
+            reconnectPeriod: 2000,
+            keepalive: 60,
+            clean: true
+        });
+
+        client.on('connect', function () {
+            setBanner('ok', '已连接 Broker');
+            log('ok', '已连接 ' + BROKER_WS);
+            client.subscribe('dormmate/#', function (err) {
+                if (err) log('error', '订阅失败：' + err.message);
+                else log('info', '已订阅 dormmate/#（仅处理 dormmate/<nodeId>/env）');
+            });
+        });
+
+        client.on('message', function (topic, message) {
+            try {
+                handleMessage(topic, message);
+            } catch (err) {
+                log('error', '处理消息出错（已捕获）：' + err.message);
+            }
+        });
+
+        client.on('close', function () { setBanner('bad', '连接已断开（自动重连中）'); });
+        client.on('offline', function () { setBanner('bad', 'Broker 离线（自动重连中）'); });
+        client.on('error', function (err) {
+            setBanner('bad', '连接错误（自动重连中）');
+            log('error', '连接错误：' + err.message);
+        });
+    }
+
+    function handleMessage(topic, message) {
+        var raw = message.toString();
+        var data;
+        try {
+            data = JSON.parse(raw);
+        } catch (err) {
+            log('error', '非法 JSON，已忽略 | ' + topic);
+            return;
+        }
+
+        var matched = topic.match(TOPIC_RE);
+        if (!matched) {
+            log('error', 'Topic 格式不正确，已忽略 | ' + topic);
+            return;
+        }
+        var topicNode = matched[1];
+        if (NODES.indexOf(topicNode) === -1) {
+            log('error', '未知节点，已忽略 | ' + topic);
+            return;
+        }
+        if (!data || NODES.indexOf(data.nodeId) === -1) {
+            log('error', 'nodeId 非法，已忽略 | ' + topic);
+            return;
+        }
+        if (data.nodeId !== topicNode) {
+            log('error', 'Topic 与 nodeId 不一致，已忽略 | ' + topic);
+            return;
+        }
+
+        var temp = Number(data.temperature);
+        var hum = Number(data.humidity);
+        if (!isFinite(temp) || !isFinite(hum)) {
+            log('error', '温湿度不是有效数值，已忽略 | ' + raw.slice(0, 40));
+            return;
+        }
+
+        var status = data.status;
+        if (VALID_STATUS.indexOf(status) === -1) {
+            status = calcStatus(temp, hum);
+        }
+
+        liveData[data.nodeId] = {
+            temperature: temp, humidity: hum, status: status,
+            time: data.time || formatStamp(new Date())
+        };
+
+        if (data.nodeId === currentNode) renderCard();
+    }
+
+    /** 固定阈值规则：与项目其余实现保持一致（本任务不改动规则）。
+     *  任务 E3：status 由后端 Publisher 计算，前端正常路径直接使用后端值；
+     *  此处仅在字段缺失/非法时兜底。 */
+    function calcStatus(temperature, humidity) {
+        if (temperature < 18) return '偏冷';
+        if (temperature >= 30) return '偏热';
+        if (humidity >= 75) return '偏湿';
+        return '正常';
+    }
+
+    /* ============================================================
+       渲染
+       ============================================================ */
+    function renderCard() {
+        var d = liveData[currentNode];
+        cardNodeEl.textContent = NODE_LABEL[currentNode];
+        cardTempEl.textContent = d ? d.temperature.toFixed(1) : '--';
+        cardHumidEl.textContent = d ? d.humidity.toFixed(1) : '--';
+        cardStatusEl.textContent = d ? d.status : '等待数据';
+        cardStatusEl.setAttribute('data-s', d ? d.status : '');
+    }
+
+    function selectNode(nodeId) {
+        currentNode = nodeId;
+        Array.prototype.forEach.call(nodeButtons, function (btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-node') === nodeId);
+        });
+        renderCard();
+    }
+
+    function renderSnapshots() {
+        if (!snapshots.length) {
+            snapListEl.innerHTML = '<div class="snap-empty">暂无快照记录</div>';
+            return;
+        }
+        var html = '';
+        snapshots.slice().reverse().forEach(function (s) {
+            html += '<li>' +
+                '<span class="sid">' + escapeHtml(s.nodeId) + '</span> · ' +
+                escapeHtml(s.time) + '<br>' +
+                '<span class="sdesc">' + escapeHtml(s.description) + '</span>' +
+                '<br><span class="sdesc">文件：' + escapeHtml(s.filename || '—') + '</span>' +
+                '</li>';
+        });
+        snapListEl.innerHTML = html;
+    }
+
+    function loadSnapshots() {
+        try {
+            var raw = window.localStorage.getItem(SNAP_KEY);
+            var parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+            return [];
+        }
+    }
+
+    function saveSnapshots() {
+        try {
+            window.localStorage.setItem(SNAP_KEY, JSON.stringify(snapshots));
+        } catch (err) {
+            log('warn', '快照记录写入 localStorage 失败：' + err.message);
+        }
+    }
+
+    /* ============================================================
+       TTS：朗读当前选中节点的实时温湿度与状态
+       ============================================================ */
+    function buildSpeechText() {
+        var d = liveData[currentNode];
+        var label = NODE_LABEL[currentNode];
+        if (!d) return label + '暂无数据。';
+        return label + '：当前温度 ' + d.temperature.toFixed(1) + ' 摄氏度，湿度 ' +
+            d.humidity.toFixed(1) + '%，状态' + d.status + '。';
+    }
+
+    function speak() {
+        var text = buildSpeechText();
+        if (!('speechSynthesis' in window)) {
+            log('warn', '当前浏览器不支持语音合成');
+            return text;
+        }
+        var utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+        log('ok', 'TTS 朗读：' + text);
+        return text;
+    }
+
+    /* ============================================================
+       Camera：拍照并与当前节点关联
+       ============================================================ */
+    function startCamera() {
+        if (stream) return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            log('error', '当前环境不支持摄像头（需要 localhost 或 https）');
+            return;
+        }
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(function (s) {
+                stream = s;
+                video.srcObject = s;
+                var p = video.play();
+                if (p && typeof p.catch === 'function') p.catch(function () { /* 自动播放被拦截时忽略 */ });
+                snapBtn.disabled = false;
+                cameraBtn.textContent = '📷 摄像头已开启';
+                log('ok', '摄像头已开启');
+            })
+            .catch(function (err) {
+                log('error', '无法访问摄像头：' + err.message +
+                    '（请用 http://localhost:8000/e2/index.html 打开本页）');
+            });
+    }
+
+    function buildSnapshotDescription() {
+        var d = liveData[currentNode];
+        var label = NODE_LABEL[currentNode];
+        if (!d) return label + ' · 暂无数据';
+        return label + ' · ' + d.temperature.toFixed(1) + '℃/' +
+            d.humidity.toFixed(1) + '% · ' + d.status;
+    }
+
+    function takeSnapshot() {
+        if (!stream) {
+            log('warn', '摄像头未开启，无法拍照');
+            return null;
+        }
+
+        var w = video.videoWidth || 320;
+        var h = video.videoHeight || 240;
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+
+        var dataUrl = canvas.toDataURL('image/png');
+        var now = new Date();
+        var filename = 'snapshot_' + currentNode + '_' + fileStamp(now) + '.png';
+
+        // 下载快照文件
+        var link = document.createElement('a');
+        link.href = dataUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        // 记录快照元数据（与当前节点关联）
+        var record = {
+            nodeId: currentNode,
+            time: formatStamp(now),
+            description: buildSnapshotDescription(),
+            filename: filename
+        };
+        snapshots.push(record);
+        saveSnapshots();
+        renderSnapshots();
+
+        log('ok', '已保存快照 ' + filename + '（' + record.description + '）');
+        return record;
+    }
+
+    /* ============================================================
+       ASR：语音指令（三条业务指令）
+       ============================================================ */
+    function setAsrStatus(text) { asrStatusEl.textContent = text; }
+    function setHeard(text) { asrHeardEl.textContent = '最近识别：' + text; }
+
+    function initRecognition() {
+        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return null;
+
+        var r = new SR();
+        r.lang = 'zh-CN';
+        r.continuous = false;
+        r.interimResults = false;
+
+        r.onstart = function () {
+            recognizing = true;
+            asrBtn.textContent = '⏹ 停止语音指令';
+            asrBtn.classList.add('active');
+            setAsrStatus('正在聆听…');
+        };
+        r.onresult = function (e) {
+            var text = e.results[0][0].transcript;
+            setHeard(text);
+            handleCommand(text);
+        };
+        r.onerror = function (e) {
+            setAsrStatus('识别出错：' + e.error);
+            log('error', 'ASR 错误：' + e.error);
+        };
+        r.onend = function () {
+            recognizing = false;
+            asrBtn.textContent = '🎤 开始语音指令';
+            asrBtn.classList.remove('active');
+            setAsrStatus('语音待机');
+        };
+        return r;
+    }
+
+    function toggleAsr() {
+        if (!recognition) recognition = initRecognition();
+        if (!recognition) {
+            log('warn', '当前浏览器不支持语音识别，请使用下方按钮');
+            setAsrStatus('不支持语音识别');
+            return;
+        }
+        if (recognizing) {
+            recognition.stop();
+            return;
+        }
+        try {
+            recognition.start();
+            log('info', '已启动语音识别，请说出指令');
+        } catch (err) {
+            log('error', '启动语音识别失败：' + err.message);
+        }
+    }
+
+    /** 语音 / 按钮共用的指令分发入口 */
+    function handleCommand(raw) {
+        var source = String(raw == null ? '' : raw);
+        var text = source.toLowerCase().replace(/\s+/g, '');
+        if (!text) return null;
+
+        if (source.indexOf('__') !== 0) {     // 内部调用不打日志，保持日志干净
+            log('info', '收到指令：' + source);
+        }
+
+        // 指令一：切换宿舍节点
+        for (var i = 0; i < NODES.length; i++) {
+            if (matchNode(text, NODES[i])) {
+                selectNode(NODES[i]);
+                log('ok', '指令执行：切换到 ' + NODE_LABEL[NODES[i]]);
+                return 'switch:' + NODES[i];
+            }
+        }
+
+        // 指令二：朗读状态
+        if (/朗读|播报|念一下|读一下|说说|说一下/.test(text)) {
+            speak();
+            return 'speak';
+        }
+
+        // 指令三：拍照
+        if (/拍照|拍一张|拍个照|快照|保存现场|照片/.test(text)) {
+            takeSnapshot();
+            return 'snapshot';
+        }
+
+        log('warn', '未识别的指令：' + raw + '（可用：切换到宿舍A / 朗读状态 / 拍照）');
+        return null;
+    }
+
+    function matchNode(text, node) {
+        var letter = node.slice(-1);            // a / b / c
+        return text.indexOf('宿舍' + letter) >= 0 ||
+               text.indexOf(node) >= 0 ||
+               text.indexOf('dorm' + letter) >= 0;
+    }
+
+    /* ============================================================
+       事件绑定
+       ============================================================ */
+    Array.prototype.forEach.call(nodeButtons, function (btn) {
+        btn.addEventListener('click', function () {
+            selectNode(btn.getAttribute('data-node'));
+            log('info', '手动切换到 ' + NODE_LABEL[currentNode]);
+        });
+    });
+
+    asrBtn.addEventListener('click', toggleAsr);
+    speakBtn.addEventListener('click', function () { speak(); });
+    cameraBtn.addEventListener('click', startCamera);
+    snapBtn.addEventListener('click', function () { takeSnapshot(); });
+    clearSnapBtn.addEventListener('click', function () {
+        snapshots = [];
+        saveSnapshots();
+        renderSnapshots();
+        log('info', '已清空快照记录');
+    });
+
+    /* ============================================================
+       供自动化验证读取 / 注入（不参与真实交互）
+       ============================================================ */
+    window.__e2 = {
+        injectCommand: function (text) { setHeard(text); return handleCommand(text); },
+        getCurrentNode: function () { return currentNode; },
+        getSpeechText: buildSpeechText,
+        getSnapshots: function () { return snapshots.slice(); },
+        getCardText: function () {
+            return cardNodeEl.textContent + ' ' + cardTempEl.textContent + '℃ / ' +
+                cardHumidEl.textContent + '% / ' + cardStatusEl.textContent;
+        },
+        hasRecognitionSupport: function () {
+            return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+        }
+    };
+
+    /* ============================================================
+       启动
+       ============================================================ */
+    selectNode('dorm-a');
+    renderSnapshots();
+    setAsrStatus(window.__e2.hasRecognitionSupport() ? '语音待机' : '不支持语音识别');
+    log('info', 'E2 页面已加载（ASR / TTS / Camera）');
+    connect();
+})();
+</script>
+
+</body>
+</html>

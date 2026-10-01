@@ -410,6 +410,7 @@
     var NODE_COLOR = { 'dorm-a': '#2563eb', 'dorm-b': '#16a34a', 'dorm-c': '#a855f7' };
     var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
     var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
+    var FOCUS_TOPIC = 'dormmate/focus';   // 任务 E3：跨端联动（小程序设为重点宿舍）
     var MAX_POINTS = 60;
     var MAX_LOG = 50;
     var STALE_MS = 10000;              // 超过该时长未收到数据，判定节点离线
@@ -510,7 +511,9 @@
         }
     }
 
-    // 状态兜底规则，与 web/script.js 及 Publisher 保持一致（温度优先）
+    // 状态兜底规则，与 web/script.js 及 Publisher 保持一致（温度优先）。
+    // 任务 E3：正常情况下 status 一律采用后端 Publisher 计算的值，前端不自行重算；
+    // 仅在 MQTT 消息缺少合法 status 时兜底（保留 D 模块的容错验收）。
     function calcStatus(temp, hum) {
         if (temp < 18) return '偏冷';
         if (temp >= 30) return '偏热';
@@ -1213,6 +1216,31 @@
         buildChart();
     }
 
+    /* ---------- 任务 E3 新增：跨端联动 ----------
+       Topic: dormmate/focus   Payload: {"nodeId":..,"source":"miniapp","time":..}
+       小程序把某个宿舍设为重点后，本页切换到该宿舍的视图。
+       复用 switchView，自动带出 tab 高亮与图表切换。 */
+    function handleFocusCommand(payloadBuffer) {
+        var cmd;
+        try {
+            cmd = JSON.parse(payloadBuffer.toString());
+        } catch (err) {
+            log('error', 'focus 消息不是合法 JSON，已忽略');
+            return;
+        }
+        if (!cmd || NODES.indexOf(cmd.nodeId) === -1) {
+            log('error', 'focus 消息的 nodeId 非法，已忽略');
+            return;
+        }
+        if (cmd.nodeId === currentView) {
+            log('info', '联动消息：' + cmd.nodeId + ' 已经是当前查看的宿舍');
+            return;
+        }
+        log('ok', '收到跨端联动（' + (cmd.source || '未知来源') +
+            '）：重点宿舍切到 ' + cmd.nodeId);
+        switchView(cmd.nodeId);
+    }
+
     // ---------- 数据更新 ----------
     function updateNode(nodeId, temp, hum, status, timeStr) {
         var s = state[nodeId];
@@ -1323,6 +1351,11 @@
 
         client.on('message', function (topic, message) {
             try {
+                // 任务 E3 新增分支：跨端联动（小程序设为重点宿舍）
+                if (topic === FOCUS_TOPIC) {
+                    handleFocusCommand(message);
+                    return;
+                }
                 handleMessage(topic, message);
             } catch (err) {
                 log('error', '处理消息时出错（已捕获）：' + err.message);

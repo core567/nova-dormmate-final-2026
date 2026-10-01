@@ -210,9 +210,12 @@
        ========================================================= */
     var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
     var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
+    // 每个宿舍的标识色，用于选中高亮（光圈 / 轮廓线）
+    var NODE_COLOR = { 'dorm-a': 0x3b82f6, 'dorm-b': 0x4ade80, 'dorm-c': 0xa855f7 };
     var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
     var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
     var FAN_TOPIC_RE = /^dormmate\/([^/]+)\/fan$/;
+    var FOCUS_TOPIC = 'dormmate/focus';   // 任务 E3：跨端联动（小程序设为重点宿舍）
     var FAN_OVERRIDE_MS = 30000;   // 手动开启风扇后强制运转的时长
     var OFFLINE_MS = 10000;        // 任务 D4：超过该时长未收到数据即判定节点离线
     var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
@@ -718,6 +721,59 @@
     scene.add(grid);
 
     /* =========================================================
+       7.7 本次升级新增的可视化对象
+           全部是新增对象，不改动上方房间与家具的构建
+       ========================================================= */
+
+    // 地面发光光圈：标识当前选中的宿舍
+    var highlightRingMat = new THREE.MeshBasicMaterial({
+        color: 0x3b82f6, transparent: true, opacity: 0.5, side: THREE.DoubleSide
+    });
+    var highlightRing = new THREE.Mesh(new THREE.RingGeometry(3.7, 4.4, 64), highlightRingMat);
+    highlightRing.rotation.x = -Math.PI / 2;
+    highlightRing.position.y = 0.03;
+    scene.add(highlightRing);
+
+    // 外侧脉动环：做出"呼吸"效果
+    var pulseRingMat = new THREE.MeshBasicMaterial({
+        color: 0x3b82f6, transparent: true, opacity: 0.28, side: THREE.DoubleSide
+    });
+    var pulseRing = new THREE.Mesh(new THREE.RingGeometry(4.15, 4.32, 64), pulseRingMat);
+    pulseRing.rotation.x = -Math.PI / 2;
+    pulseRing.position.y = 0.035;
+    scene.add(pulseRing);
+
+    // 房间地面外圈轮廓线
+    var outlineMat = new THREE.LineBasicMaterial({
+        color: 0x3b82f6, transparent: true, opacity: 0.85
+    });
+    var outlineGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-HALF_W - 0.12, 0.04, -HALF_D - 0.12),
+        new THREE.Vector3(HALF_W + 0.12, 0.04, -HALF_D - 0.12),
+        new THREE.Vector3(HALF_W + 0.12, 0.04, HALF_D + 0.12),
+        new THREE.Vector3(-HALF_W - 0.12, 0.04, HALF_D + 0.12),
+        new THREE.Vector3(-HALF_W - 0.12, 0.04, -HALF_D - 0.12)
+    ]);
+    var outline = new THREE.Line(outlineGeo, outlineMat);
+    scene.add(outline);
+
+    // 屋顶事件状态灯（OPEN 橙 / HANDLING 蓝 / RECOVERED 绿）
+    var phaseLampMat = new THREE.MeshBasicMaterial({ color: 0x64748b });
+    var phaseLamp = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.3), phaseLampMat);
+    phaseLamp.position.set(0, ROOM.h + 0.16, HALF_D - 0.5);
+    scene.add(phaseLamp);
+
+    // 处理中光环：环绕风扇，仅在 HANDLING 状态显示
+    var handlingRingMat = new THREE.MeshBasicMaterial({
+        color: 0x3b82f6, transparent: true, opacity: 0.8
+    });
+    var handlingRing = new THREE.Mesh(new THREE.TorusGeometry(0.92, 0.04, 8, 48), handlingRingMat);
+    handlingRing.position.set(2.35, 1.4, -1.35);   // 与风扇同位置
+    handlingRing.rotation.z = 0.55;                // 稍微倾斜，自转时更明显
+    handlingRing.visible = false;
+    scene.add(handlingRing);
+
+    /* =========================================================
        8. 动画状态（当前值 → 目标值，逐帧缓动）
        ========================================================= */
     var anim = {
@@ -790,6 +846,27 @@
         hudFan.textContent = (anim.fanSpeed * 12).toFixed(2) + ' rad/s' +
             (fanOverride ? '（手动开启）' : '');
 
+        // 升级③：镜头聚焦插值（ease-out），结束后恢复自动旋转
+        if (focusAnim) {
+            var ft = Math.min((Date.now() - focusAnim.startTime) / FOCUS_DURATION, 1);
+            var fe = 1 - Math.pow(1 - ft, 3);
+            camera.position.lerpVectors(focusAnim.fromPos, focusAnim.toPos, fe);
+            controls.target.lerpVectors(focusAnim.fromTarget, focusAnim.toTarget, fe);
+            if (ft >= 1) {
+                if (focusAnim.restoreAuto) controls.autoRotate = true;
+                focusAnim = null;
+            }
+        }
+
+        // 升级①：高亮外环缓慢脉动
+        var pulseScale = 1 + Math.sin(now / 520) * 0.03;
+        pulseRing.scale.set(pulseScale, pulseScale, 1);
+
+        // 升级②：处理中光环自转（仅在 HANDLING 状态可见）
+        if (handlingRing.visible) {
+            handlingRing.rotation.y += dt * 2.6;
+        }
+
         controls.update();
         renderer.render(scene, camera);
     }
@@ -799,6 +876,130 @@
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
+
+    /* =========================================================
+       10.5 本次升级新增：事件状态可视化 / 选中高亮 / 镜头聚焦 / 动态标签
+            纯新增逻辑，不改动上方渲染循环与下方切换 / MQTT 处理
+       ========================================================= */
+
+    var PHASE_COLOR = {
+        normal: 0x64748b,      // 暗灰
+        open: 0xf59e0b,        // 橙：待处理
+        handling: 0x3b82f6,    // 蓝：处理中
+        recovered: 0x22c55e    // 绿：已恢复
+    };
+    var PHASE_TEXT = {
+        normal: '正常', open: '待处理', handling: '处理中', recovered: '已恢复'
+    };
+
+    // 事件状态是本地派生量：异常数据 → open，收到风扇命令 → handling，
+    // 数据恢复正常 → recovered。与 Dashboard 的状态机同构，不新增 MQTT 处理分支。
+    var eventPhase = { 'dorm-a': 'normal', 'dorm-b': 'normal', 'dorm-c': 'normal' };
+
+    function setPhase(nodeId, phase) {
+        eventPhase[nodeId] = phase;
+        if (nodeId === currentNode) {
+            applyPhaseVisual();
+            updateLabel();
+        }
+    }
+
+    function applyPhaseVisual() {
+        var phase = eventPhase[currentNode] || 'normal';
+        phaseLampMat.color.setHex(PHASE_COLOR[phase] || PHASE_COLOR.normal);
+        handlingRing.visible = (phase === 'handling');
+    }
+
+    function applyHighlight(nodeId) {
+        var color = NODE_COLOR[nodeId];
+        highlightRingMat.color.setHex(color);
+        pulseRingMat.color.setHex(color);
+        outlineMat.color.setHex(color);
+    }
+
+    /* ---------- 镜头聚焦 ---------- */
+    var FOCUS_DURATION = 1200;
+    var focusAnim = null;
+
+    function startFocus() {
+        focusAnim = {
+            startTime: Date.now(),
+            fromPos: camera.position.clone(),
+            fromTarget: controls.target.clone(),
+            toPos: new THREE.Vector3(4.8, 3.4, 6.8),
+            toTarget: new THREE.Vector3(0, 1.4, 0),
+            restoreAuto: controls.autoRotate
+        };
+        controls.autoRotate = false;     // 聚焦期间暂停自动旋转，结束后恢复
+    }
+
+    /* ---------- 动态标签（canvas 贴图 Sprite，无额外 CDN 依赖）---------- */
+    var labelCanvas = document.createElement('canvas');
+    labelCanvas.width = 512;
+    labelCanvas.height = 132;
+    var labelCtx = labelCanvas.getContext('2d');
+    var labelTexture = new THREE.CanvasTexture(labelCanvas);
+    var labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: labelTexture, transparent: true, depthTest: false
+    }));
+    labelSprite.scale.set(4.6, 1.19, 1);
+    labelSprite.position.set(0, ROOM.h + 1.15, 0);
+    scene.add(labelSprite);
+
+    function drawRoundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    function updateLabel() {
+        var cached = nodeCache[currentNode];
+        var phase = eventPhase[currentNode] || 'normal';
+
+        var line1 = NODE_LABEL[currentNode] + '（' + currentNode + '）';
+        var line2 = cached
+            ? (cached.data.temperature.toFixed(1) + '℃ / ' +
+               cached.data.humidity.toFixed(1) + '% · ' + cached.status +
+               ' · ' + PHASE_TEXT[phase])
+            : ('等待数据 · ' + PHASE_TEXT[phase]);
+
+        labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+        labelCtx.fillStyle = 'rgba(15, 23, 42, 0.84)';
+        drawRoundRect(labelCtx, 4, 4, labelCanvas.width - 8, labelCanvas.height - 8, 18);
+        labelCtx.fill();
+
+        // 左侧状态色条，颜色即事件状态
+        labelCtx.fillStyle = '#' + ('00000' + PHASE_COLOR[phase].toString(16)).slice(-6);
+        labelCtx.fillRect(4, 4, 12, labelCanvas.height - 8);
+
+        labelCtx.fillStyle = '#e2e8f0';
+        labelCtx.font = 'bold 36px "Microsoft YaHei", sans-serif';
+        labelCtx.fillText(line1, 32, 56);
+
+        labelCtx.fillStyle = '#94a3b8';
+        labelCtx.font = '28px "Microsoft YaHei", sans-serif';
+        labelCtx.fillText(line2, 32, 102);
+
+        labelTexture.needsUpdate = true;
+        labelSprite.userData.text = line1 + ' | ' + line2;
+    }
+
+    /* ---------- 供自动化验证读取状态（不参与渲染）---------- */
+    window.__dormScene = {
+        getHighlightColor: function () { return highlightRingMat.color.getHexString(); },
+        getPhase: function () { return eventPhase[currentNode]; },
+        getPhaseLampColor: function () { return phaseLampMat.color.getHexString(); },
+        isHandlingGlowVisible: function () { return handlingRing.visible; },
+        getLabelText: function () { return labelSprite.userData.text || ''; }
+    };
 
     /* =========================================================
        11. 宿舍切换
@@ -813,6 +1014,9 @@
         });
         offlineFlag = false;        // 任务 D4：切换宿舍后重置离线标记
         hudTime.style.color = '';
+        applyHighlight(nodeId);     // 升级①：光圈/轮廓线切换为该节点颜色
+        applyPhaseVisual();         // 升级②：状态灯切到该节点的事件状态
+        startFocus();               // 升级③：镜头聚焦到该宿舍
         log('info', '已切换到 ' + nodeId + '（' + NODE_LABEL[nodeId] + '）');
 
         var cached = nodeCache[nodeId];
@@ -831,6 +1035,7 @@
             statusBadge.textContent = '等待数据';
             statusBadge.style.background = '#475569';
         }
+        updateLabel();              // 升级③：刷新浮空动态标签
     }
 
     nodeSwitchEl.addEventListener('click', function (e) {
@@ -841,6 +1046,9 @@
     /* =========================================================
        12. MQTT：消息校验
        ========================================================= */
+    /** 固定阈值规则：与 web / dashboard / publisher / analyze 保持一致。
+     *  任务 E3：status 由后端 Publisher 计算，前端正常路径直接使用其值；
+     *  此处仅在字段缺失/非法时兜底（保留 D 模块的容错验收）。 */
     function calcStatus(temp, hum) {
         if (temp < 18) return '偏冷';
         if (temp >= 30) return '偏热';
@@ -904,9 +1112,19 @@
             }
         };
 
+        // 升级②：本地派生事件状态（不改变上方的校验与缓存逻辑）
+        if (status === '正常') {
+            if (eventPhase[data.nodeId] !== 'normal') setPhase(data.nodeId, 'recovered');
+        } else if (eventPhase[data.nodeId] === 'normal' ||
+                   eventPhase[data.nodeId] === 'recovered') {
+            setPhase(data.nodeId, 'open');
+        }
+        // 处理中若继续收到异常数据则保持 handling，等数据恢复正常才转 recovered
+
         // 只有当前选中宿舍的数据才驱动 3D 场景
         if (data.nodeId === currentNode) {
             updateScene(status, nodeCache[data.nodeId].data);
+            updateLabel();          // 升级③：数据更新后同步浮空标签
         }
     }
 
@@ -947,7 +1165,33 @@
         }
 
         fanOverrideUntil = Date.now() + FAN_OVERRIDE_MS;
+        setPhase(nodeId, 'handling');       // 升级②：事件进入「处理中」
         log('ok', '收到手动开启风扇命令，风扇将运转 ' + (FAN_OVERRIDE_MS / 1000) + ' 秒');
+    }
+
+    /* ---------- 任务 E3 新增：跨端联动 ----------
+       Topic: dormmate/focus   Payload: {"nodeId":..,"source":"miniapp","time":..}
+       小程序设为重点宿舍后，本页同步选中该宿舍。
+       复用 selectNode，自动带出高亮光圈、镜头聚焦与浮空标签。 */
+    function handleFocusCommand(payloadBuffer) {
+        var cmd;
+        try {
+            cmd = JSON.parse(payloadBuffer.toString());
+        } catch (err) {
+            log('error', 'focus 消息不是合法 JSON，已忽略');
+            return;
+        }
+        if (!cmd || NODES.indexOf(cmd.nodeId) === -1) {
+            log('error', 'focus 消息的 nodeId 非法，已忽略');
+            return;
+        }
+        if (cmd.nodeId === currentNode) {
+            log('info', '联动消息：' + cmd.nodeId + ' 已经是当前宿舍');
+            return;
+        }
+        log('ok', '收到跨端联动（' + (cmd.source || '未知来源') +
+            '）：重点宿舍切到 ' + cmd.nodeId);
+        selectNode(cmd.nodeId);
     }
 
     /* =========================================================
@@ -984,6 +1228,11 @@
 
         client.on('message', function (topic, message) {
             try {
+                // 任务 E3 新增分支：跨端联动（小程序设为重点宿舍）
+                if (topic === FOCUS_TOPIC) {
+                    handleFocusCommand(message);
+                    return;
+                }
                 // 任务 A 新增分支：风扇控制命令；其余消息仍走原有 env 处理逻辑
                 if (FAN_TOPIC_RE.test(topic)) {
                     handleFanCommand(topic, message);
