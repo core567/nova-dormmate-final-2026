@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DormMate 3D 数字空间</title>
+<!--
+  重要：本页面必须用 file:// 双击打开，不要用 Live Server。
+  原因见 docs/bug-fix.md 的 Bug 1：file:// 页面加载 ES module 会被 CORS 拦截，
+  因此这里一律使用 UMD 构建（window.THREE / window.mqtt），且不拆分本地 js 文件。
+
+  场景为「剖视」效果：房间墙体使用单面 Plane（法线朝室内），
+  从房间外部环绕观察时墙面不渲染，因此可以直接看到室内陈设。
+-->
+<style>
+    * { box-sizing: border-box; }
+
+    html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #1b2431;
+        color: #e2e8f0;
+        font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    }
+
+    #scene-container { position: fixed; inset: 0; }
+
+    .overlay { position: fixed; z-index: 10; }
+
+    /* ---- 左上：HUD 实时数据 ---- */
+    #hud {
+        top: 16px; left: 16px;
+        width: 248px;
+        background: rgba(16, 21, 31, .82);
+        border: 1px solid rgba(148, 163, 184, .26);
+        border-radius: 12px;
+        padding: 14px 16px;
+        backdrop-filter: blur(8px);
+    }
+    #hud h1 { font-size: 15px; margin: 0 0 4px; }
+    #hud .sub { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
+    .hud-row { display: flex; justify-content: space-between; align-items: baseline; margin: 7px 0; font-size: 13px; }
+    .hud-row .k { color: #94a3b8; }
+    .hud-row .v { font-weight: bold; font-variant-numeric: tabular-nums; }
+    #hud .v.big { font-size: 19px; }
+    #hud .sep { height: 1px; background: rgba(148, 163, 184, .18); margin: 11px 0; }
+
+    #statusBadge {
+        display: inline-block;
+        padding: 3px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: bold;
+        background: #475569;
+        color: #fff;
+        transition: background .4s;
+    }
+
+    /* ---- 右上：连接状态与按钮 ---- */
+    #conn-panel {
+        top: 16px; right: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(16, 21, 31, .82);
+        border: 1px solid rgba(148, 163, 184, .26);
+        border-radius: 12px;
+        padding: 10px 14px;
+    }
+    #banner { font-size: 13px; font-weight: bold; display: flex; align-items: center; gap: 7px; }
+    #banner::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+    #banner.ok { color: #4ade80; }
+    #banner.warn { color: #fbbf24; }
+    #banner.bad { color: #f87171; }
+
+    button {
+        font-family: inherit;
+        font-size: 12px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, .3);
+        background: rgba(51, 65, 85, .8);
+        color: #e2e8f0;
+        cursor: pointer;
+        transition: background .15s, border-color .15s;
+    }
+    button:hover:not(:disabled) { background: #475569; border-color: #94a3b8; }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ---- 底部：节点切换 ---- */
+    #node-switch {
+        bottom: 18px; left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+        background: rgba(16, 21, 31, .82);
+        border: 1px solid rgba(148, 163, 184, .26);
+        border-radius: 999px;
+        padding: 8px 10px;
+    }
+    #node-switch button { border-radius: 999px; padding: 7px 20px; }
+    #node-switch button.active { background: #2563eb; border-color: #3b82f6; color: #fff; font-weight: bold; }
+
+    /* ---- 左下：事件日志 ---- */
+    #log-panel {
+        bottom: 18px; left: 16px;
+        width: 318px;
+        background: rgba(16, 21, 31, .82);
+        border: 1px solid rgba(148, 163, 184, .26);
+        border-radius: 12px;
+        padding: 10px 12px;
+    }
+    #log-panel h2 { font-size: 12px; margin: 0 0 6px; color: #94a3b8; font-weight: normal; }
+    #log {
+        height: 90px;
+        overflow-y: auto;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 11px;
+        line-height: 1.65;
+    }
+    #log .line { display: flex; gap: 8px; }
+    #log .t { color: #64748b; flex: none; }
+    #log .m { word-break: break-all; color: #cbd5e1; }
+    #log .warn .m { color: #fbbf24; }
+    #log .error .m { color: #f87171; }
+    #log .ok .m { color: #4ade80; }
+
+    /* ---- CDN 加载失败兜底 ---- */
+    #fallback {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        background: #1b2431;
+        color: #e2e8f0;
+        padding: 60px;
+        font-size: 15px;
+        line-height: 1.9;
+    }
+    #fallback code { background: #1e293b; padding: 2px 6px; border-radius: 4px; color: #fbbf24; }
+</style>
+</head>
+<body>
+
+<div id="scene-container"></div>
+
+<div id="hud" class="overlay">
+    <h1>DormMate 3D 宿舍</h1>
+    <div class="sub">数据来源：MQTT 实时消息</div>
+    <div class="hud-row"><span class="k">宿舍</span><span class="v" id="hudNode">dorm-a</span></div>
+    <div class="hud-row"><span class="k">温度</span><span class="v big" id="hudTemp">--</span></div>
+    <div class="hud-row"><span class="k">湿度</span><span class="v big" id="hudHumid">--</span></div>
+    <div class="hud-row"><span class="k">状态</span><span id="statusBadge">等待数据</span></div>
+    <div class="sep"></div>
+    <div class="hud-row"><span class="k">数据时间</span><span class="v" id="hudTime" style="font-size:11px">--</span></div>
+    <div class="hud-row"><span class="k">风扇转速</span><span class="v" id="hudFan" style="font-size:11px">0.00</span></div>
+</div>
+
+<div id="conn-panel" class="overlay">
+    <span id="banner" class="warn">正在连接…</span>
+    <button id="btnDisconnect" disabled>断开连接</button>
+    <button id="btnReconnect" disabled>重新连接</button>
+</div>
+
+<div id="node-switch" class="overlay">
+    <button data-node="dorm-a" class="active">宿舍 A</button>
+    <button data-node="dorm-b">宿舍 B</button>
+    <button data-node="dorm-c">宿舍 C</button>
+</div>
+
+<div id="log-panel" class="overlay">
+    <h2>事件日志</h2>
+    <div id="log"></div>
+</div>
+
+<div id="fallback"></div>
+
+<!--
+  UMD 构建：普通 <script src>，在 file:// 下不受 module CORS 限制。
+  若改用 <script type="module"> 或引入本地 js 文件，页面会直接黑屏（见 docs/bug-fix.md）。
+-->
+<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+<script>
+(function () {
+    'use strict';
+
+    /* =========================================================
+       0. 依赖检查
+       ========================================================= */
+    var missing = [];
+    if (typeof THREE === 'undefined') missing.push('three.js');
+    if (typeof mqtt === 'undefined') missing.push('mqtt.js');
+    if (missing.length) {
+        var fb = document.getElementById('fallback');
+        fb.style.display = 'block';
+        fb.innerHTML = '<h2>依赖加载失败</h2>' +
+            '<p>未能加载：<code>' + missing.join('、') + '</code></p>' +
+            '<p>请确认本机可以访问 unpkg.com（CDN 被墙或断网时会触发此提示）。</p>' +
+            '<p>three.js 与 mqtt.js 均通过 <code>&lt;script src&gt;</code> 引入，' +
+            '这是为了在 file:// 协议下正常工作。</p>';
+        return;
+    }
+
+    /* =========================================================
+       1. 常量与配置
+       ========================================================= */
+    var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+    var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
+    var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
+    var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
+    var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
+
+    var ROOM = { w: 6, h: 3.1, d: 4 };            // 房间尺寸（米）
+    var WIN = { x0: -1.05, x1: 0.95, y0: 1.05, y1: 2.35 };   // 窗户开口（前墙局部坐标）
+
+    /* 状态 → 视觉参数：指示灯颜色 + 风扇转速/颜色
+       任务要求正常/偏热/偏湿三态；偏冷是业务规则里存在的第四态，用琥珀色补齐 */
+    var STATUS_CONFIG = {
+        '正常': { fanSpeed: 0,    fanColor: 0xf2f2f2, lampColor: 0x22c55e, lampGlow: 0x15803d },
+        '偏热': { fanSpeed: 0.45, fanColor: 0xe8705f, lampColor: 0xef4444, lampGlow: 0x7f1d1d },
+        '偏湿': { fanSpeed: 0,    fanColor: 0xf2f2f2, lampColor: 0x3b82f6, lampGlow: 0x1e3a8a },
+        '偏冷': { fanSpeed: 0,    fanColor: 0xf2f2f2, lampColor: 0xf59e0b, lampGlow: 0x78350f }
+    };
+
+    var STATUS_BADGE_COLOR = {
+        '正常': '#16a34a', '偏冷': '#f59e0b', '偏热': '#dc2626', '偏湿': '#2563eb'
+    };
+
+    /* =========================================================
+       2. 页面元素
+       ========================================================= */
+    var hudNode = document.getElementById('hudNode');
+    var hudTemp = document.getElementById('hudTemp');
+    var hudHumid = document.getElementById('hudHumid');
+    var hudTime = document.getElementById('hudTime');
+    var hudFan = document.getElementById('hudFan');
+    var statusBadge = document.getElementById('statusBadge');
+    var bannerEl = document.getElementById('banner');
+    var logEl = document.getElementById('log');
+    var btnDisconnect = document.getElementById('btnDisconnect');
+    var btnReconnect = document.getElementById('btnReconnect');
+    var nodeSwitchEl = document.getElementById('node-switch');
+
+    /* =========================================================
+       3. 通用工具
+       ========================================================= */
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+    function nowTime() {
+        var d = new Date();
+        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function escapeHtml(text) {
+        return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function log(level, text) {
+        var line = document.createElement('div');
+        line.className = 'line ' + level;
+        line.innerHTML = '<span class="t">' + nowTime() + '</span>' +
+                         '<span class="m">' + escapeHtml(text) + '</span>';
+        logEl.insertBefore(line, logEl.firstChild);
+        while (logEl.childNodes.length > 40) logEl.removeChild(logEl.lastChild);
+    }
+
+    function setBanner(kind, text) {
+        bannerEl.className = kind;
+        bannerEl.textContent = text;
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    // 统一使用 PBR 哑光材质：roughness 接近 1、metalness 为 0，表面平整无高光噪点
+    function matte(hex, roughness) {
+        return new THREE.MeshStandardMaterial({
+            color: hex,
+            roughness: roughness === undefined ? 0.9 : roughness,
+            metalness: 0.0
+        });
+    }
+
+    /* =========================================================
+       4. 渲染器 / 相机 / 控制器
+       ========================================================= */
+    var container = document.getElementById('scene-container');
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1b2431);
+    scene.fog = new THREE.Fog(0x1b2431, 30, 58);
+
+    var camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 300);
+    camera.position.set(6.2, 4.4, 8.6);
+
+    var renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    // 色调映射让高光平滑滚降、避免浅色物体糊成一片白；
+    // 不使用 sRGBEncoding 输出，否则材质色需全部转线性，否则整体会被提亮一档导致过曝
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.32;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // 鼠标拖拽旋转视角、滚轮缩放；autoRotate 由 OrbitControls 原生支持——
+    // 拖拽期间 state !== NONE，自动旋转自动暂停，松开后恢复
+    var controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.25, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.55;
+    controls.minDistance = 5;
+    controls.maxDistance = 22;
+    controls.maxPolarAngle = Math.PI * 0.49;   // 不允许转到地板以下
+
+    /* =========================================================
+       5. 灯光：半球光铺底 + 主光投影 + 补光 + 室内吸顶灯
+          环境光刻意压低，让方向光产生明暗对比与阴影，避免物体"发平"
+       ========================================================= */
+    var hemi = new THREE.HemisphereLight(0xdce9f7, 0x6b5a48, 0.62);
+    scene.add(hemi);
+
+    // 主光：模拟窗外日光，负责投影
+    var sun = new THREE.DirectionalLight(0xfff1dc, 1.15);
+    sun.position.set(4.5, 9.5, 11);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 45;
+    sun.shadow.camera.left = -9;
+    sun.shadow.camera.right = 9;
+    sun.shadow.camera.top = 9;
+    sun.shadow.camera.bottom = -9;
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.02;
+    scene.add(sun);
+
+    // 补光：从反方向柔化暗部，避免背光面死黑
+    var fill = new THREE.DirectionalLight(0xc4d6ee, 0.34);
+    fill.position.set(-7, 5.5, -5);
+    scene.add(fill);
+
+    // 室内吸顶灯：暖白光，给室内一点自己的光源
+    var ceilLamp = new THREE.PointLight(0xffe6c4, 0.55, 16, 2);
+    ceilLamp.position.set(0, 2.7, 0.2);
+    scene.add(ceilLamp);
+
+    /* =========================================================
+       6. 房间：地板 / 天花板 / 三面墙 / 带窗的正面墙
+          墙体均为单面 Plane，法线朝室内 —— 从外部环绕时不遮挡视线，也不投影
+       ========================================================= */
+    var room = new THREE.Group();
+    scene.add(room);
+
+    var matFloor = matte(0xc8a87e, 0.82);     // 浅木色哑光地板
+    var matWall = matte(0xf1ece3, 0.95);      // 浅米白墙面
+    var matCeil = matte(0xeceef1, 0.98);      // 浅灰白天花板
+    var matTrim = matte(0xe4ded2, 0.9);       // 踢脚线
+
+    function addPlane(w, h, material, pos, rot, receive) {
+        var m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), material);
+        m.position.set(pos[0], pos[1], pos[2]);
+        m.rotation.set(rot[0], rot[1], rot[2]);
+        m.receiveShadow = !!receive;
+        room.add(m);
+        return m;
+    }
+
+    var HALF_W = ROOM.w / 2;   // x 范围 ±3
+    var HALF_D = ROOM.d / 2;   // z 范围 ±2
+
+    // 地板（法线朝上，略微抬高避免与网格线 z-fighting）与天花板（法线朝下）
+    addPlane(ROOM.w, ROOM.d, matFloor, [0, 0.02, 0], [-Math.PI / 2, 0, 0], true);
+    addPlane(ROOM.w, ROOM.d, matCeil, [0, ROOM.h, 0], [Math.PI / 2, 0, 0], false);
+
+    // 后墙 z = -2（法线朝 +z）、左墙 x = -3（法线朝 +x）、右墙 x = 3（法线朝 -x）
+    addPlane(ROOM.w, ROOM.h, matWall, [0, ROOM.h / 2, -HALF_D], [0, 0, 0], true);
+    addPlane(ROOM.d, ROOM.h, matWall, [-HALF_W, ROOM.h / 2, 0], [0, Math.PI / 2, 0], true);
+    addPlane(ROOM.d, ROOM.h, matWall, [HALF_W, ROOM.h / 2, 0], [0, -Math.PI / 2, 0], true);
+
+    // 前墙 z = 2（法线朝 -z，朝室内），拆成 4 块留出窗洞
+    var frontRot = [0, Math.PI, 0];
+    var winW = WIN.x1 - WIN.x0;
+    var winH = WIN.y1 - WIN.y0;
+    var sideW = (ROOM.w - winW) / 2;
+    addPlane(sideW, ROOM.h, matWall, [-HALF_W + sideW / 2, ROOM.h / 2, HALF_D], frontRot, true);
+    addPlane(sideW, ROOM.h, matWall, [HALF_W - sideW / 2, ROOM.h / 2, HALF_D], frontRot, true);
+    addPlane(winW, ROOM.h - WIN.y1, matWall, [(WIN.x0 + WIN.x1) / 2, (ROOM.h + WIN.y1) / 2, HALF_D], frontRot, false);
+    addPlane(winW, WIN.y0, matWall, [(WIN.x0 + WIN.x1) / 2, WIN.y0 / 2, HALF_D], frontRot, false);
+
+    // 踢脚线：沿墙脚一圈细条，明显提升精致度
+    function addTrim(w, h, d, pos) {
+        var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matTrim);
+        m.position.set(pos[0], pos[1], pos[2]);
+        m.receiveShadow = true;
+        room.add(m);
+    }
+    addTrim(ROOM.w, 0.1, 0.03, [0, 0.07, -HALF_D + 0.015]);
+    addTrim(0.03, 0.1, ROOM.d, [-HALF_W + 0.015, 0.07, 0]);
+    addTrim(0.03, 0.1, ROOM.d, [HALF_W - 0.015, 0.07, 0]);
+
+    /* ---------- 窗户：深灰窗框 + 淡蓝半透明玻璃 + 窗帘 ---------- */
+    var windowCx = (WIN.x0 + WIN.x1) / 2;
+    var windowCy = (WIN.y0 + WIN.y1) / 2;
+    var windowGroup = new THREE.Group();
+    windowGroup.position.set(windowCx, windowCy, HALF_D - 0.03);
+    room.add(windowGroup);
+
+    var matFrame = matte(0x545c66, 0.6);   // 深灰窗框
+    var frameT = 0.1;
+
+    function frameBar(w, h, x, y) {
+        var bar = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.1), matFrame);
+        bar.position.set(x, y, 0);
+        bar.castShadow = true;
+        windowGroup.add(bar);
+    }
+    frameBar(winW + frameT * 2, frameT, 0, winH / 2);       // 上框
+    frameBar(winW + frameT * 2, frameT, 0, -winH / 2);      // 下框
+    frameBar(frameT, winH, -winW / 2, 0);                   // 左框
+    frameBar(frameT, winH, winW / 2, 0);                    // 右框
+    frameBar(0.06, winH, 0, 0);                             // 竖向中梃
+
+    // 玻璃：半透明淡蓝，带轻微反光
+    var glassMat = new THREE.MeshStandardMaterial({
+        color: 0xbcd9ec,
+        transparent: true,
+        opacity: 0.26,
+        roughness: 0.08,
+        metalness: 0.1,
+        side: THREE.DoubleSide
+    });
+    windowGroup.add(new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), glassMat));
+
+    // 窗帘：窗户两侧的浅色布帘，给正面墙增加层次
+    var matCurtain = matte(0xe6ded0, 0.98);
+    [-1, 1].forEach(function (sgn) {
+        var curtain = new THREE.Mesh(new THREE.BoxGeometry(0.34, 2.0, 0.1), matCurtain);
+        curtain.position.set(sgn * (winW / 2 + frameT + 0.2), 0.1, 0);
+        curtain.castShadow = true;
+        windowGroup.add(curtain);
+    });
+    // 窗帘杆
+    var rod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, winW + 1.3, 12), matFrame);
+    rod.rotation.z = Math.PI / 2;
+    rod.position.set(0, 1.06, 0);
+    windowGroup.add(rod);
+
+    /* ---------- 门（后墙右侧）---------- */
+    var doorGroup = new THREE.Group();
+    doorGroup.position.set(1.15, 0, -HALF_D + 0.03);
+    room.add(doorGroup);
+
+    var matDoor = matte(0xd8cbb6, 0.8);
+    var doorPanel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.15, 0.05), matDoor);
+    doorPanel.position.y = 1.075;
+    doorPanel.castShadow = true;
+    doorGroup.add(doorPanel);
+
+    var doorFrameMat = matte(0xc3b7a2, 0.85);
+    [[-1, 0], [1, 0]].forEach(function (c) {
+        var jamb = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.21, 0.08), doorFrameMat);
+        jamb.position.set(c[0] * 0.53, 1.105, 0);
+        doorGroup.add(jamb);
+    });
+    var lintel = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.06, 0.08), doorFrameMat);
+    lintel.position.y = 2.21;
+    doorGroup.add(lintel);
+    // 门把手
+    var knob = new THREE.Mesh(
+        new THREE.SphereGeometry(0.035, 16, 12),
+        new THREE.MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.35, metalness: 0.75 })
+    );
+    knob.position.set(0.38, 1.05, 0.05);
+    doorGroup.add(knob);
+
+    /* =========================================================
+       7. 家具
+       ========================================================= */
+
+    /* ---------- 7.1 床铺（房间左侧，床头靠后墙）---------- */
+    var bed = new THREE.Group();
+    bed.position.set(-2.15, 0, -0.55);
+    room.add(bed);
+
+    var matBedFrame = matte(0xa9b2bb, 0.85);   // 浅灰床架
+    var matMattress = matte(0xeee4d2, 0.95);   // 浅米色床垫
+    var matQuilt = matte(0xcfdde8, 0.97);      // 浅蓝灰被子
+    var matPillow = matte(0xf6f1e7, 0.98);     // 枕头
+
+    var BED_W = 1.2, BED_L = 2.05, BED_H = 0.4;
+    var bedBoard = new THREE.Mesh(new THREE.BoxGeometry(BED_W, 0.08, BED_L), matBedFrame);
+    bedBoard.position.y = BED_H;
+    bedBoard.castShadow = true;
+    bedBoard.receiveShadow = true;
+    bed.add(bedBoard);
+
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (c) {
+        var leg = new THREE.Mesh(new THREE.BoxGeometry(0.085, BED_H, 0.085), matBedFrame);
+        leg.position.set(c[0] * (BED_W / 2 - 0.07), BED_H / 2, c[1] * (BED_L / 2 - 0.07));
+        leg.castShadow = true;
+        bed.add(leg);
+    });
+
+    var mattress = new THREE.Mesh(new THREE.BoxGeometry(BED_W - 0.04, 0.2, BED_L - 0.04), matMattress);
+    mattress.position.y = BED_H + 0.14;
+    mattress.castShadow = true;
+    mattress.receiveShadow = true;
+    bed.add(mattress);
+
+    // 被子：盖在床垫下半部分
+    var quilt = new THREE.Mesh(new THREE.BoxGeometry(BED_W - 0.02, 0.1, BED_L * 0.62), matQuilt);
+    quilt.position.set(0, BED_H + 0.27, BED_L * 0.17);
+    quilt.castShadow = true;
+    quilt.receiveShadow = true;
+    bed.add(quilt);
+
+    // 枕头
+    var pillow = new THREE.Mesh(new THREE.BoxGeometry(BED_W * 0.72, 0.13, 0.34), matPillow);
+    pillow.position.set(0, BED_H + 0.31, -BED_L / 2 + 0.26);
+    pillow.rotation.x = -0.12;
+    pillow.castShadow = true;
+    bed.add(pillow);
+
+    // 床头板
+    var headboard = new THREE.Mesh(new THREE.BoxGeometry(BED_W, 0.55, 0.07), matBedFrame);
+    headboard.position.set(0, BED_H + 0.28, -BED_L / 2 + 0.04);
+    headboard.castShadow = true;
+    bed.add(headboard);
+
+    /* ---------- 7.2 书桌 + 椅子（靠窗）---------- */
+    var DESK_W = 1.5, DESK_D = 0.66, DESK_H = 0.75;
+    var desk = new THREE.Group();
+    desk.position.set(0.55, 0, 1.5);
+    room.add(desk);
+
+    var matDeskTop = matte(0xc08c5a, 0.72);   // 胡桃木色桌面
+    var matDeskLeg = matte(0xf2f2f2, 0.75);   // 白色支架
+
+    var deskTop = new THREE.Mesh(new THREE.BoxGeometry(DESK_W, 0.06, DESK_D), matDeskTop);
+    deskTop.position.y = DESK_H;
+    deskTop.castShadow = true;
+    deskTop.receiveShadow = true;
+    desk.add(deskTop);
+
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (c) {
+        var leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, DESK_H, 0.06), matDeskLeg);
+        leg.position.set(c[0] * (DESK_W / 2 - 0.08), DESK_H / 2, c[1] * (DESK_D / 2 - 0.07));
+        leg.castShadow = true;
+        desk.add(leg);
+    });
+    var stretcher = new THREE.Mesh(new THREE.BoxGeometry(DESK_W - 0.16, 0.05, 0.05), matDeskLeg);
+    stretcher.position.set(0, 0.16, 0);
+    desk.add(stretcher);
+
+    // 桌上台灯
+    var lampG = new THREE.Group();
+    lampG.position.set(-DESK_W / 2 + 0.3, DESK_H + 0.03, -0.05);
+    desk.add(lampG);
+
+    var lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.03, 20), matDeskLeg);
+    lampBase.castShadow = true;
+    lampG.add(lampBase);
+
+    var lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.42, 10), matDeskLeg);
+    lampStem.position.y = 0.22;
+    lampStem.castShadow = true;
+    lampG.add(lampStem);
+
+    var lampShade = new THREE.Mesh(
+        new THREE.ConeGeometry(0.14, 0.17, 20, 1, true),
+        new THREE.MeshStandardMaterial({ color: 0xf6d9a8, roughness: 0.85, side: THREE.DoubleSide })
+    );
+    lampShade.position.y = 0.45;
+    lampShade.rotation.x = Math.PI;
+    lampShade.castShadow = true;
+    lampG.add(lampShade);
+
+    // 桌上书本
+    var bookColors = [0x9b6b5a, 0x5a7a9b, 0x7a8f6b];
+    bookColors.forEach(function (c, i) {
+        var book = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.04, 0.3), matte(c, 0.9));
+        book.position.set(0.3 + i * 0.015, DESK_H + 0.05 + i * 0.041, 0.02 - i * 0.01);
+        book.rotation.y = -0.15 + i * 0.08;
+        book.castShadow = true;
+        desk.add(book);
+    });
+
+    // 椅子
+    var chair = new THREE.Group();
+    chair.position.set(0.55, 0, 0.86);
+    room.add(chair);
+
+    var matChair = matte(0x9aa3ad, 0.85);
+    var CHAIR_S = 0.44, CHAIR_H = 0.45;
+    var seat = new THREE.Mesh(new THREE.BoxGeometry(CHAIR_S, 0.05, CHAIR_S), matChair);
+    seat.position.y = CHAIR_H;
+    seat.castShadow = true;
+    seat.receiveShadow = true;
+    chair.add(seat);
+
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (c) {
+        var leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, CHAIR_H, 0.05), matChair);
+        leg.position.set(c[0] * (CHAIR_S / 2 - 0.05), CHAIR_H / 2, c[1] * (CHAIR_S / 2 - 0.05));
+        leg.castShadow = true;
+        chair.add(leg);
+    });
+    var backrest = new THREE.Mesh(new THREE.BoxGeometry(CHAIR_S, 0.46, 0.05), matChair);
+    backrest.position.set(0, CHAIR_H + 0.25, CHAIR_S / 2 - 0.03);
+    backrest.castShadow = true;
+    chair.add(backrest);
+    var backPost = new THREE.Mesh(new THREE.BoxGeometry(CHAIR_S - 0.14, 0.42, 0.04), matChair);
+    backPost.position.set(0, CHAIR_H + 0.24, CHAIR_S / 2 - 0.03);
+    chair.add(backPost);
+
+    /* ---------- 7.3 立式风扇（房间角落，核心交互对象）---------- */
+    var fanGroup = new THREE.Group();
+    fanGroup.position.set(2.35, 0, -1.35);
+    fanGroup.rotation.y = -Math.PI / 4;
+    room.add(fanGroup);
+
+    // 风扇所有部件共用一份材质，改颜色时整体一起变
+    var matFan = matte(0xf2f2f2, 0.6);
+
+    var fanBase = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.37, 0.07, 28), matFan);
+    fanBase.position.y = 0.035;
+    fanBase.castShadow = true;
+    fanBase.receiveShadow = true;
+    fanGroup.add(fanBase);
+
+    var fanPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 1.22, 20), matFan);
+    fanPole.position.y = 0.68;
+    fanPole.castShadow = true;
+    fanGroup.add(fanPole);
+
+    var fanMotor = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.28), matFan);
+    fanMotor.position.y = 1.4;
+    fanMotor.castShadow = true;
+    fanGroup.add(fanMotor);
+
+    // 叶片组：绕 z 轴旋转，转速由 MQTT 状态决定
+    var bladeGroup = new THREE.Group();
+    bladeGroup.position.y = 1.4;
+    for (var bi = 0; bi < 3; bi++) {
+        var holder = new THREE.Group();
+        var blade = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.7, 0.035), matFan);
+        blade.position.y = 0.41;
+        blade.rotation.y = 0.42;      // 叶片带一点扭角，更像真实扇叶
+        blade.castShadow = true;
+        holder.add(blade);
+        holder.rotation.z = (bi * 2 * Math.PI) / 3;
+        bladeGroup.add(holder);
+    }
+    fanGroup.add(bladeGroup);
+
+    // 外圈护罩
+    var guard = new THREE.Mesh(new THREE.TorusGeometry(0.76, 0.02, 8, 44), matFan);
+    guard.position.y = 1.4;
+    guard.castShadow = true;
+    fanGroup.add(guard);
+
+    // 护罩内的细网圈，增加细节
+    [0.34, 0.54].forEach(function (r) {
+        var ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.012, 6, 36), matFan);
+        ring.position.y = 1.4;
+        fanGroup.add(ring);
+    });
+
+    /* ---------- 7.4 状态指示灯面板（挂在后墙）---------- */
+    var panelGroup = new THREE.Group();
+    panelGroup.position.set(-1.75, 2.28, -HALF_D + 0.05);
+    room.add(panelGroup);
+
+    var panelBase = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.58, 0.07), matte(0x3a4250, 0.75));
+    panelBase.castShadow = true;
+    panelGroup.add(panelBase);
+
+    // 发光面用 Basic 材质：指示灯本身是发光体，不受场景光照影响，
+    // 颜色即设定值，不会被环境光或自发光叠加冲淡成白色（见 docs/bug-fix.md 的 Bug 4）
+    var lampMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+    var lamp = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.38, 0.03), lampMat);
+    lamp.position.z = 0.045;
+    panelGroup.add(lamp);
+
+    /* ---------- 7.5 墙面装饰画（右墙）---------- */
+    var artGroup = new THREE.Group();
+    artGroup.position.set(HALF_W - 0.04, 1.95, 0.2);
+    artGroup.rotation.y = -Math.PI / 2;
+    room.add(artGroup);
+
+    var artFrame = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.62, 0.04), matte(0x6b5a48, 0.8));
+    artFrame.castShadow = true;
+    artGroup.add(artFrame);
+
+    var artCanvas = new THREE.Mesh(new THREE.PlaneGeometry(0.74, 0.5), matte(0xdbe7ee, 0.95));
+    artCanvas.position.z = 0.025;
+    artGroup.add(artCanvas);
+
+    // 画面上两抹色块，避免纯粹一片空白
+    [[-0.16, 0.05, 0.26, 0.16, 0x8fb3cc], [0.14, -0.08, 0.2, 0.12, 0xd8b98f]].forEach(function (b) {
+        var patch = new THREE.Mesh(new THREE.PlaneGeometry(b[2], b[3]), matte(b[4], 0.95));
+        patch.position.set(b[0], b[1], 0.027);
+        artGroup.add(patch);
+    });
+
+    /* ---------- 7.6 地面网格参考平面 ---------- */
+    var grid = new THREE.GridHelper(70, 70, 0x5b6b82, 0x2f3d51);
+    grid.position.y = 0;
+    scene.add(grid);
+
+    /* =========================================================
+       8. 动画状态（当前值 → 目标值，逐帧缓动）
+       ========================================================= */
+    var anim = {
+        fanSpeed: 0,
+        fanColor: new THREE.Color(0xf2f2f2),
+        lampColor: new THREE.Color(0x22c55e)
+    };
+
+    var target = {
+        fanSpeed: 0,
+        fanColor: new THREE.Color(0xf2f2f2),
+        lampColor: new THREE.Color(0x22c55e)
+    };
+
+    /* =========================================================
+       9. updateScene —— MQTT status → 3D 视觉变化的唯一入口
+       ========================================================= */
+    function updateScene(status, data) {
+        var cfg = STATUS_CONFIG[status];
+        if (!cfg) {
+            log('warn', '未知状态「' + status + '」，场景按【正常】处理');
+            cfg = STATUS_CONFIG['正常'];
+        }
+
+        target.fanSpeed = cfg.fanSpeed;          // 偏热 → 旋转
+        target.fanColor.setHex(cfg.fanColor);    // 偏热 → 浅红
+        target.lampColor.setHex(cfg.lampColor);  // 正常绿 / 偏热红 / 偏湿蓝
+
+        renderHUD(status, data);
+    }
+
+    function renderHUD(status, data) {
+        if (data) {
+            hudNode.textContent = data.nodeId + '（' + (NODE_LABEL[data.nodeId] || '') + '）';
+            hudTemp.textContent = data.temperature.toFixed(1) + ' ℃';
+            hudHumid.textContent = data.humidity.toFixed(1) + ' %';
+            hudTime.textContent = data.time || nowTime();
+        }
+        var known = STATUS_CONFIG[status] ? status : '正常';
+        statusBadge.textContent = known;
+        statusBadge.style.background = STATUS_BADGE_COLOR[known] || '#475569';
+    }
+
+    /* =========================================================
+       10. 渲染循环：单次初始化，每帧只更新属性
+       ========================================================= */
+    var lastFrameTime = 0;
+
+    function animate(time) {
+        requestAnimationFrame(animate);
+
+        var now = time || 0;
+        var dt = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.1) : 0.016;
+        lastFrameTime = now;
+
+        // 转速缓动：偏热时平滑加速，恢复时平滑停转
+        anim.fanSpeed = lerp(anim.fanSpeed, target.fanSpeed, 1 - Math.pow(0.001, dt));
+        bladeGroup.rotation.z += anim.fanSpeed * dt * 12;
+
+        var k = 1 - Math.pow(0.002, dt);
+        anim.fanColor.lerp(target.fanColor, k);
+        anim.lampColor.lerp(target.lampColor, k);
+
+        matFan.color.copy(anim.fanColor);
+        lampMat.color.copy(anim.lampColor);
+
+        hudFan.textContent = (anim.fanSpeed * 12).toFixed(2) + ' rad/s';
+
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', function () {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    /* =========================================================
+       11. 宿舍切换
+       ========================================================= */
+    var currentNode = 'dorm-a';
+    var nodeCache = {};   // 每个节点的最新数据，切换时立即回放
+
+    function selectNode(nodeId) {
+        currentNode = nodeId;
+        Array.prototype.forEach.call(nodeSwitchEl.children, function (btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-node') === nodeId);
+        });
+        log('info', '已切换到 ' + nodeId + '（' + NODE_LABEL[nodeId] + '）');
+
+        var cached = nodeCache[nodeId];
+        if (cached) {
+            updateScene(cached.status, cached.data);
+            hudNode.textContent = cached.data.nodeId + '（' + NODE_LABEL[nodeId] + '）';
+            hudTemp.textContent = cached.data.temperature.toFixed(1) + ' ℃';
+            hudHumid.textContent = cached.data.humidity.toFixed(1) + ' %';
+            hudTime.textContent = cached.data.time || nowTime();
+        } else {
+            hudNode.textContent = nodeId + '（' + NODE_LABEL[nodeId] + '）';
+            hudTemp.textContent = '--';
+            hudHumid.textContent = '--';
+            hudTime.textContent = '--';
+            updateScene('正常', null);
+            statusBadge.textContent = '等待数据';
+            statusBadge.style.background = '#475569';
+        }
+    }
+
+    nodeSwitchEl.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[data-node]');
+        if (btn) selectNode(btn.getAttribute('data-node'));
+    });
+
+    /* =========================================================
+       12. MQTT：消息校验
+       ========================================================= */
+    function calcStatus(temp, hum) {
+        if (temp < 18) return '偏冷';
+        if (temp >= 30) return '偏热';
+        if (hum >= 75) return '偏湿';
+        return '正常';
+    }
+
+    function handleMessage(topic, payloadBuffer) {
+        var raw = payloadBuffer.toString();
+        var data;
+
+        try {
+            data = JSON.parse(raw);
+        } catch (err) {
+            log('error', '非法 JSON，已忽略 | ' + topic + ' | ' + raw.slice(0, 40));
+            return;
+        }
+
+        var matched = topic.match(TOPIC_RE);
+        if (!matched) {
+            log('error', 'Topic 格式不正确，已忽略 | ' + topic);
+            return;
+        }
+
+        var topicNode = matched[1];
+        if (NODES.indexOf(topicNode) === -1) {
+            log('error', '未知节点，已忽略 | ' + topic);
+            return;
+        }
+        if (!data || typeof data !== 'object' || NODES.indexOf(data.nodeId) === -1) {
+            log('error', 'nodeId 非法，已忽略 | topic=' + topic);
+            return;
+        }
+        if (data.nodeId !== topicNode) {
+            log('error', 'Topic 与 nodeId 不一致，已忽略 | ' + topic + ' vs ' + data.nodeId);
+            return;
+        }
+
+        var temp = Number(data.temperature);
+        var hum = Number(data.humidity);
+        if (!isFinite(temp) || !isFinite(hum)) {
+            log('error', '温湿度不是有效数值，已忽略 | ' + raw.slice(0, 40));
+            return;
+        }
+
+        var status = data.status;
+        if (VALID_STATUS.indexOf(status) === -1) {
+            status = calcStatus(temp, hum);
+            log('warn', 'status 缺失或非法，已按规则重算 | ' + data.nodeId + ' -> ' + status);
+        }
+
+        nodeCache[data.nodeId] = {
+            status: status,
+            data: {
+                nodeId: data.nodeId,
+                temperature: temp,
+                humidity: hum,
+                status: status,
+                time: data.time
+            }
+        };
+
+        // 只有当前选中宿舍的数据才驱动 3D 场景
+        if (data.nodeId === currentNode) {
+            updateScene(status, nodeCache[data.nodeId].data);
+        }
+    }
+
+    /* =========================================================
+       13. MQTT 连接与断开
+       ========================================================= */
+    var client = null;
+
+    function setConnectedUI(connected) {
+        btnDisconnect.disabled = !connected;
+        btnReconnect.disabled = connected;
+    }
+
+    function connect() {
+        if (client) return;
+
+        setBanner('warn', '正在连接…');
+        client = mqtt.connect(BROKER_WS, {
+            clientId: 'dormmate-3d-' + Math.random().toString(16).slice(2, 8),
+            connectTimeout: 4000,
+            reconnectPeriod: 2000,
+            keepalive: 60,
+            clean: true
+        });
+
+        client.on('connect', function () {
+            setBanner('ok', '已连接 Broker');
+            setConnectedUI(true);
+            log('ok', '已连接 ' + BROKER_WS);
+            client.subscribe('dormmate/#', function (err) {
+                if (err) log('error', '订阅失败：' + err.message);
+                else log('info', '已订阅 dormmate/#');
+            });
+        });
+
+        client.on('message', function (topic, message) {
+            try {
+                handleMessage(topic, message);
+            } catch (err) {
+                log('error', '处理消息时出错（已捕获）：' + err.message);
+            }
+        });
+
+        client.on('reconnect', function () { setBanner('warn', '正在重连…'); });
+        client.on('close', function () {
+            setBanner('bad', '连接已断开（自动重连中）');
+            setConnectedUI(false);
+        });
+        client.on('offline', function () { setBanner('bad', 'Broker 离线（自动重连中）'); });
+        client.on('error', function (err) {
+            setBanner('bad', '连接错误（自动重连中）');
+            log('error', '连接错误：' + err.message);
+        });
+    }
+
+    // 手动断开：必须走页面按钮，end(true) 才会停止自动重连
+    btnDisconnect.addEventListener('click', function () {
+        if (!client) return;
+        client.end(true);
+        client = null;
+        setBanner('bad', '已手动断开（不会自动重连）');
+        setConnectedUI(false);
+        log('warn', '已手动断开 MQTT 连接，点「重新连接」可恢复');
+    });
+
+    btnReconnect.addEventListener('click', function () {
+        log('info', '手动触发重新连接');
+        connect();
+    });
+
+    /* =========================================================
+       14. 启动
+       ========================================================= */
+    selectNode('dorm-a');
+    log('info', '3D 宿舍场景已加载（PBR 哑光材质 + 实时阴影）');
+    log('info', '房间：地板 / 天花板 / 三面墙 / 带窗正面墙 / 踢脚线 / 门');
+    log('info', '家具：床铺、书桌、椅子、台灯、书本、立式风扇、指示灯面板、装饰画');
+    log('info', '开始连接 Broker ' + BROKER_WS);
+    connect();
+    requestAnimationFrame(animate);
+})();
+</script>
+
+</body>
+</html>
