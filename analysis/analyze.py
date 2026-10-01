@@ -1,4 +1,5 @@
 print("我的Python脚本运行了！")
+import argparse
 import csv
 import html
 import os
@@ -6,6 +7,16 @@ from datetime import datetime
 
 import pandas as pd
 import matplotlib.pyplot as plt
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_parser = argparse.ArgumentParser(description='DormMate 环境报告生成')
+_parser.add_argument(
+    '--history',
+    default=os.path.join(BASE_DIR, '..', 'server', 'node_readings_history.csv'),
+    help='历史数据 CSV 路径（更换文件即更换训练集，模型会重新训练）',
+)
+ARGS = _parser.parse_args()
 
 # 解决matplotlib中文显示问题
 plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows用黑体
@@ -63,8 +74,7 @@ print("趋势图已保存为 trend.png")
 # 5. 任务 B：读取实时历史数据 CSV，自动生成【今日摘要】
 #    摘要里的每个数字都来自对 CSV 的统计计算，没有任何写死的句子
 NODE_LABELS = {'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C'}
-HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           '..', 'server', 'node_readings_history.csv')
+HISTORY_CSV = ARGS.history
 
 
 def parse_ts(text):
@@ -180,7 +190,97 @@ def build_daily_summary(path):
 daily_summary_html = build_daily_summary(HISTORY_CSV)
 
 
-# 6. 自动生成 report.html (不用手工修改，每次运行自动覆盖生成)
+# 6. 任务 C：IsolationForest 孤立森林异常检测
+def build_ml_section(result):
+    """生成 ML 异常分析板块：模型信息 + 并排对照 + 两类案例。"""
+    if result is None:
+        return ('<h2>ML 异常分析（IsolationForest）</h2>'
+                '<p>未能完成模型训练与推理，请检查历史数据文件是否存在。</p>')
+
+    s = result['stats']
+    cfg = result['config']
+    out = ['<h2>ML 异常分析（IsolationForest 孤立森林）</h2>']
+
+    out.append(f"""
+    <div class="summary">
+        <h3>一、模型与训练信息</h3>
+        <p>训练宿舍：<strong>{result['node_label']}</strong>（{result['node']}）；
+           训练样本：<strong>{s['count']}</strong> 条「正常」记录
+           （去重后 {s['unique']} 个不同温湿度组合）。</p>
+        <p>学到的正常环境范围：温度 {s['temp_min']:.1f} ~ {s['temp_max']:.1f} ℃，
+           湿度 {s['humid_min']:.1f} ~ {s['humid_max']:.1f} %。</p>
+        <p>训练数据时间跨度：{s['time_min']} ~ {s['time_max']}。</p>
+        <p>模型参数：n_estimators={cfg['n_estimators']}，
+           contamination={cfg['contamination']}，
+           random_state={cfg['random_state']}（固定，保证重复运行结果一致）。</p>
+        <p>数据清洗：历史 CSV 共 {result['total_rows']} 行有效记录，
+           另有 {result['invalid_rows']} 行温湿度非数值已丢弃。</p>
+        <p><strong>新测试数据不参与训练</strong>；更换 CSV
+           （<code>python analyze.py --history &lt;路径&gt;</code>）即可重新训练。</p>
+    </div>
+    """)
+
+    out.append('<h3>二、并排对照：固定阈值规则 vs 机器学习</h3>')
+    out.append('<table><tr><th>时间</th><th>温度 (℃)</th><th>湿度 (%)</th>'
+               '<th>固定规则判断</th><th>ML 判断</th><th>ML 离群分数</th><th>是否一致</th></tr>')
+    for c in result['compare_rows']:
+        agree = '一致' if c['agree'] else '<span style="color:#d97706;font-weight:bold;">分歧</span>'
+        ml_txt = ('<span style="color:red;">异常</span>' if c['ml_anomaly']
+                  else '<span style="color:green;">正常</span>')
+        rule_txt = (c['rule'] if c['rule'] == '正常'
+                    else f'<span style="color:red;">{c["rule"]}</span>')
+        out.append(f'<tr><td>{html.escape(c["time"])}</td><td>{c["temperature"]:.1f}</td>'
+                   f'<td>{c["humidity"]:.1f}</td><td>{rule_txt}</td><td>{ml_txt}</td>'
+                   f'<td>{c["ml_score"]:+.3f}</td><td>{agree}</td></tr>')
+    out.append('</table>')
+
+    out.append('<h3>三、对比案例：固定规则判正常，机器学习判异常</h3>')
+    if result['contrast_cases']:
+        out.append('<p>这些点每一个特征都还在固定阈值之内，但它们出现的'
+                   '<strong>组合方式</strong>在历史正常数据里很少见，因此被孤立森林识别为离群。</p>')
+        out.append('<table><tr><th>时间</th><th>温度 (℃)</th><th>湿度 (%)</th>'
+                   '<th>固定规则</th><th>ML 判据</th></tr>')
+        for c in result['contrast_cases']:
+            out.append(f'<tr><td>{html.escape(c["time"])}</td><td>{c["temperature"]:.1f}</td>'
+                       f'<td>{c["humidity"]:.1f}</td><td>正常</td>'
+                       f'<td><span style="color:red;">{c["ml_score"]:+.3f}（异常）</span></td></tr>')
+        out.append('</table>')
+    else:
+        out.append('<p>本次数据中未检索到该类案例。</p>')
+
+    out.append('<h3>四、机器学习判断不理想的案例与原因</h3>')
+    if result['missed_cases']:
+        out.append('<p>以下记录<strong>固定规则判为异常，模型却判为正常（漏报）</strong>，'
+                   '逐条给出原因。</p>')
+        out.append('<table><tr><th>时间</th><th>温度 (℃)</th><th>湿度 (%)</th>'
+                   '<th>固定规则</th><th>ML 分数</th><th>模型为何漏判</th></tr>')
+        for c in result['missed_cases']:
+            reason = ml_anomaly.explain_missed(c, s)
+            out.append(f'<tr><td>{html.escape(c["time"])}</td><td>{c["temperature"]:.1f}</td>'
+                       f'<td>{c["humidity"]:.1f}</td><td>{c["rule"]}</td>'
+                       f'<td>{c["ml_score"]:+.3f}</td>'
+                       f'<td>{html.escape(reason)}</td></tr>')
+        out.append('</table>')
+    else:
+        out.append('<p>本次数据中未检索到该类案例。</p>')
+
+    return ''.join(out)
+
+
+ml_section_html = ''
+try:
+    import ml_anomaly
+    ML_RESULT = ml_anomaly.run_analysis(
+        HISTORY_CSV, os.path.join(BASE_DIR, 'ml_test_cases.csv'))
+    ml_section_html = build_ml_section(ML_RESULT)
+    print(f"ML 分析完成：训练样本 {ML_RESULT['stats']['count']} 条 | "
+          f"对比案例 {len(ML_RESULT['contrast_cases'])} 条 | "
+          f"漏报案例 {len(ML_RESULT['missed_cases'])} 条")
+except Exception as exc:
+    ml_section_html = build_ml_section(None)
+    print(f"ML 分析未完成：{exc}")
+
+# 7. 自动生成 report.html (不用手工修改，每次运行自动覆盖生成)
 html_content = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -241,7 +341,9 @@ for index, row in attention_records.iterrows():
 html_content += """
     </table>
 """
-# 6. 任务 A：读取 Dashboard 导出的 events.csv，生成"事件复盘"表
+html_content += ml_section_html
+
+# 7. 任务 A：读取 Dashboard 导出的 events.csv，生成"事件复盘"表
 #    （沿用现有 CSV → report.html 管线：Dashboard 导出 → 放到本目录 → 重新运行本脚本）
 EVENT_COLUMNS = ['宿舍名称', '异常开始时间', '异常类型',
                  '优先原因', '用户操作', '恢复时间', '最终结果']
