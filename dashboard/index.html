@@ -1,56 +1,577 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>DormMate 实时 Dashboard</title>
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-    <style>
-        body { font-family: sans-serif; display: flex; gap: 20px; padding: 20px; }
-        .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; width: 200px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .title { font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #333; }
-        .data-row { margin: 5px 0; }
-        .status { font-weight: bold; color: #d32f2f; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DormMate 实时 Dashboard</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<style>
+    :root {
+        --bg: #f1f5f9;
+        --panel: #ffffff;
+        --border: #e2e8f0;
+        --text: #1e293b;
+        --muted: #64748b;
+        --ok: #16a34a;
+        --warn: #f59e0b;
+        --bad: #dc2626;
+        --cold: #2563eb;
+        --hot: #dc2626;
+        --wet: #ea580c;
+        --normal: #16a34a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    }
+
+    header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+
+    h1 { font-size: 22px; margin: 0; }
+    h1 small { font-size: 13px; color: var(--muted); font-weight: normal; margin-left: 8px; }
+
+    .banner {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: bold;
+        border: 1px solid transparent;
+    }
+    .banner::before {
+        content: "";
+        width: 9px; height: 9px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+    .banner.ok   { color: var(--ok);   background: #dcfce7; border-color: #bbf7d0; }
+    .banner.warn { color: var(--warn); background: #fef3c7; border-color: #fde68a; }
+    .banner.bad  { color: var(--bad);  background: #fee2e2; border-color: #fecaca; }
+
+    .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+
+    .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-left: 5px solid var(--muted);
+        border-radius: 10px;
+        padding: 16px;
+        cursor: pointer;
+        transition: box-shadow .15s, transform .15s;
+    }
+    .card:hover { box-shadow: 0 4px 14px rgba(15, 23, 42, .1); transform: translateY(-2px); }
+    .card.active { box-shadow: 0 0 0 2px #93c5fd; }
+    .card.stale { opacity: .55; }
+    .card[data-status="正常"] { border-left-color: var(--normal); }
+    .card[data-status="偏冷"] { border-left-color: var(--cold); }
+    .card[data-status="偏热"] { border-left-color: var(--hot); }
+    .card[data-status="偏湿"] { border-left-color: var(--wet); }
+
+    .card-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 15px;
+        font-weight: bold;
+        margin-bottom: 12px;
+    }
+    .card-title .node-id { color: var(--muted); font-size: 12px; font-weight: normal; }
+
+    .metric { display: flex; align-items: baseline; gap: 6px; margin: 6px 0; }
+    .metric .value { font-size: 26px; font-weight: bold; font-variant-numeric: tabular-nums; }
+    .metric .unit { font-size: 13px; color: var(--muted); }
+    .metric .label { font-size: 13px; color: var(--muted); width: 34px; }
+
+    .status-line { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .badge {
+        padding: 3px 12px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: bold;
+        color: #fff;
+        background: var(--muted);
+    }
+    .badge[data-status="正常"] { background: var(--normal); }
+    .badge[data-status="偏冷"] { background: var(--cold); }
+    .badge[data-status="偏热"] { background: var(--hot); }
+    .badge[data-status="偏湿"] { background: var(--wet); }
+
+    .stale-tag {
+        display: none;
+        font-size: 12px;
+        color: var(--bad);
+        font-weight: bold;
+    }
+    .card.stale .stale-tag { display: inline; }
+    .card-time { margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+    .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 20px;
+    }
+
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .tab {
+        padding: 6px 16px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: #f8fafc;
+        color: var(--muted);
+        font-size: 13px;
+        cursor: pointer;
+        font-family: inherit;
+    }
+    .tab.active { background: #2563eb; border-color: #2563eb; color: #fff; font-weight: bold; }
+
+    .chart-box { position: relative; height: 320px; }
+
+    .log-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+    .log-head h2 { font-size: 15px; margin: 0; }
+    .log-head span { font-size: 12px; color: var(--muted); }
+
+    .log {
+        height: 190px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #0f172a;
+        padding: 8px 10px;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        line-height: 1.7;
+    }
+    .log-line { display: flex; gap: 10px; }
+    .log-time { color: #64748b; flex: none; }
+    .log-msg { word-break: break-all; }
+    .log-info .log-msg { color: #cbd5e1; }
+    .log-warn .log-msg { color: #fbbf24; }
+    .log-error .log-msg { color: #f87171; }
+    .log-ok .log-msg { color: #4ade80; }
+</style>
 </head>
 <body>
-    <div class="card" id="dorm-a">
-        <div class="title">宿舍 A (dorm-a)</div>
-        <div class="data-row">温度: <span class="temp">-</span>℃</div>
-        <div class="data-row">湿度: <span class="humid">-</span>%</div>
-        <div class="data-row">状态: <span class="status">等待数据</span></div>
-    </div>
-    <div class="card" id="dorm-b">
-        <div class="title">宿舍 B (dorm-b)</div>
-        <div class="data-row">温度: <span class="temp">-</span>℃</div>
-        <div class="data-row">湿度: <span class="humid">-</span>%</div>
-        <div class="data-row">状态: <span class="status">等待数据</span></div>
-    </div>
-    <div class="card" id="dorm-c">
-        <div class="title">宿舍 C (dorm-c)</div>
-        <div class="data-row">温度: <span class="temp">-</span>℃</div>
-        <div class="data-row">湿度: <span class="humid">-</span>%</div>
-        <div class="data-row">状态: <span class="status">等待数据</span></div>
-    </div>
 
-    <script>
-        // 【注意】：这里用了 8083 端口，并且路径是 /mqtt
-        const client = mqtt.connect('ws://127.0.0.1:8083/mqtt');
+<header>
+    <h1>DormMate 实时 Dashboard <small>MQTT · ws://127.0.0.1:8083/mqtt</small></h1>
+    <div class="banner warn" id="banner">正在连接 Broker…</div>
+</header>
 
-        client.on('connect', () => {
-            console.log('网页已成功连接至 Broker！');
-            // 订阅 3 个节点的频道
-            client.subscribe('dormmate/+/env');
+<div class="cards" id="cards"></div>
+
+<div class="panel">
+    <div class="tabs" id="tabs"></div>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+</div>
+
+<div class="panel">
+    <div class="log-head">
+        <h2>事件日志</h2>
+        <span>最近 50 条 · 数据校验与连接状态</span>
+    </div>
+    <div class="log" id="log"></div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    // ---------- 常量 ----------
+    var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+    var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
+    var NODE_COLOR = { 'dorm-a': '#2563eb', 'dorm-b': '#16a34a', 'dorm-c': '#a855f7' };
+    var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
+    var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
+    var MAX_POINTS = 60;
+    var MAX_LOG = 50;
+    var STALE_MS = 10000;
+
+    // ---------- 状态：每个节点一份独立数据，互不串号 ----------
+    var state = {};
+    NODES.forEach(function (id) {
+        state[id] = {
+            labels: [],
+            temp: [],
+            hum: [],
+            temperature: null,
+            humidity: null,
+            status: '',
+            lastUpdate: null
+        };
+    });
+    var currentView = 'all';
+    var chart = null;
+
+    var cardsEl = document.getElementById('cards');
+    var tabsEl = document.getElementById('tabs');
+    var logEl = document.getElementById('log');
+    var bannerEl = document.getElementById('banner');
+
+    // ---------- 通用工具 ----------
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+    function nowTime() {
+        var d = new Date();
+        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function truncate(text, len) {
+        text = String(text);
+        return text.length > len ? text.slice(0, len) + '…' : text;
+    }
+
+    function log(level, text) {
+        var line = document.createElement('div');
+        line.className = 'log-line log-' + level;
+        line.innerHTML = '<span class="log-time">' + nowTime() + '</span>' +
+                         '<span class="log-msg">' + escapeHtml(text) + '</span>';
+        logEl.insertBefore(line, logEl.firstChild);
+        while (logEl.childNodes.length > MAX_LOG) {
+            logEl.removeChild(logEl.lastChild);
+        }
+    }
+
+    // 状态兜底规则，与 web/script.js 及 Publisher 保持一致（温度优先）
+    function calcStatus(temp, hum) {
+        if (temp < 18) return '偏冷';
+        if (temp >= 30) return '偏热';
+        if (hum >= 75) return '偏湿';
+        return '正常';
+    }
+
+    function setBanner(kind, text) {
+        bannerEl.className = 'banner ' + kind;
+        bannerEl.textContent = text;
+    }
+
+    // ---------- 卡片渲染 ----------
+    function buildCards() {
+        NODES.forEach(function (id) {
+            var card = document.createElement('div');
+            card.className = 'card';
+            card.id = 'card-' + id;
+            card.innerHTML =
+                '<div class="card-title"><span>' + NODE_LABEL[id] + '</span>' +
+                '<span class="node-id">' + id + '</span></div>' +
+                '<div class="metric"><span class="label">温度</span>' +
+                '<span class="value temp">--</span><span class="unit">℃</span></div>' +
+                '<div class="metric"><span class="label">湿度</span>' +
+                '<span class="value humid">--</span><span class="unit">%</span></div>' +
+                '<div class="status-line"><span class="badge status">等待数据</span>' +
+                '<span class="stale-tag">数据超时</span></div>' +
+                '<div class="card-time">最后更新：--</div>';
+            card.addEventListener('click', function () { switchView(id); });
+            cardsEl.appendChild(card);
+        });
+    }
+
+    function renderCard(id) {
+        var s = state[id];
+        var card = document.getElementById('card-' + id);
+        if (!card) return;
+        if (s.status) {
+            card.setAttribute('data-status', s.status);
+            card.querySelector('.status').setAttribute('data-status', s.status);
+            card.querySelector('.status').textContent = s.status;
+        }
+        card.querySelector('.temp').textContent = s.temperature === null ? '--' : s.temperature.toFixed(1);
+        card.querySelector('.humid').textContent = s.humidity === null ? '--' : s.humidity.toFixed(1);
+        card.querySelector('.card-time').textContent = '最后更新：' +
+            (s.lastUpdate ? new Date(s.lastUpdate).toTimeString().slice(0, 8) : '--');
+        card.classList.toggle('active', currentView === id);
+    }
+
+    function checkStale() {
+        var now = Date.now();
+        NODES.forEach(function (id) {
+            var s = state[id];
+            var stale = s.lastUpdate !== null && (now - s.lastUpdate) > STALE_MS;
+            var card = document.getElementById('card-' + id);
+            if (card) card.classList.toggle('stale', stale);
+        });
+    }
+
+    // ---------- 图表 ----------
+    function alignSeries(arr, len) {
+        if (arr.length === len) return arr.slice();
+        return new Array(len - arr.length).fill(null).concat(arr);
+    }
+
+    function chartData() {
+        if (currentView === 'all') {
+            var ref = NODES.reduce(function (a, b) {
+                return state[a].labels.length >= state[b].labels.length ? a : b;
+            });
+            var len = state[ref].labels.length;
+            return {
+                labels: state[ref].labels.slice(),
+                datasets: NODES.map(function (id) {
+                    return {
+                        label: NODE_LABEL[id] + ' 温度',
+                        data: alignSeries(state[id].temp, len),
+                        borderColor: NODE_COLOR[id],
+                        backgroundColor: NODE_COLOR[id],
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    };
+                })
+            };
+        }
+        var s = state[currentView];
+        return {
+            labels: s.labels.slice(),
+            datasets: [
+                { label: '温度 (℃)', data: s.temp.slice(), borderColor: '#ef4444',
+                  tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y' },
+                { label: '湿度 (%)', data: s.hum.slice(), borderColor: '#3b82f6',
+                  tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y1' }
+            ]
+        };
+    }
+
+    function chartOptions() {
+        var options = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', labels: { boxWidth: 14, font: { size: 12 } } },
+                title: {
+                    display: true,
+                    text: currentView === 'all'
+                        ? '全部宿舍 · 温度趋势（最近 ' + MAX_POINTS + ' 个采样点）'
+                        : NODE_LABEL[currentView] + ' · 温湿度趋势（最近 ' + MAX_POINTS + ' 个采样点）',
+                    font: { size: 13 },
+                    color: '#475569'
+                }
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+                y: { title: { display: true, text: '温度 (℃)' }, suggestedMin: 15, suggestedMax: 33 }
+            }
+        };
+        if (currentView !== 'all') {
+            options.scales.y1 = {
+                position: 'right',
+                title: { display: true, text: '湿度 (%)' },
+                suggestedMin: 40,
+                suggestedMax: 90,
+                grid: { drawOnChartArea: false }
+            };
+        }
+        return options;
+    }
+
+    // 切换视图时整体重建，避免双轴配置残留在单轴视图上
+    function buildChart() {
+        if (chart) { chart.destroy(); chart = null; }
+        chart = new Chart(document.getElementById('chart'), {
+            type: 'line',
+            data: chartData(),
+            options: chartOptions()
+        });
+    }
+
+    function refreshChart() {
+        if (!chart) { buildChart(); return; }
+        var d = chartData();
+        chart.data.labels = d.labels;
+        chart.data.datasets.forEach(function (ds, i) { ds.data = d.datasets[i].data; });
+        chart.update('none');
+    }
+
+    // ---------- 视图切换 ----------
+    function buildTabs() {
+        var views = ['all'].concat(NODES);
+        views.forEach(function (v) {
+            var btn = document.createElement('button');
+            btn.className = 'tab';
+            btn.textContent = v === 'all' ? '全部宿舍' : NODE_LABEL[v];
+            btn.addEventListener('click', function () { switchView(v); });
+            tabsEl.appendChild(btn);
+        });
+    }
+
+    function switchView(view) {
+        currentView = view;
+        Array.prototype.forEach.call(tabsEl.children, function (btn, i) {
+            var v = i === 0 ? 'all' : NODES[i - 1];
+            btn.classList.toggle('active', v === currentView);
+        });
+        NODES.forEach(renderCard);
+        buildChart();
+    }
+
+    // ---------- 数据更新 ----------
+    function updateNode(nodeId, temp, hum, status, timeStr) {
+        var s = state[nodeId];
+        s.temperature = temp;
+        s.humidity = hum;
+        s.status = status;
+        s.lastUpdate = Date.now();
+
+        var label = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timeStr)
+            ? timeStr.slice(11)
+            : nowTime();
+
+        s.labels.push(label);
+        s.temp.push(temp);
+        s.hum.push(hum);
+        if (s.labels.length > MAX_POINTS) {
+            s.labels.shift();
+            s.temp.shift();
+            s.hum.shift();
+        }
+
+        renderCard(nodeId);
+        checkStale();
+        refreshChart();
+    }
+
+    // ---------- 消息校验：任何非法数据只记日志，绝不让页面崩溃 ----------
+    function handleMessage(topic, payloadBuffer) {
+        var raw = payloadBuffer.toString();
+
+        var data;
+        try {
+            data = JSON.parse(raw);
+        } catch (err) {
+            log('error', '非法 JSON，已忽略 | topic=' + topic + ' | payload=' + truncate(raw, 60));
+            return;
+        }
+
+        var matched = topic.match(TOPIC_RE);
+        if (!matched) {
+            log('error', 'Topic 格式不正确，已忽略 | ' + topic);
+            return;
+        }
+
+        var topicNode = matched[1];
+        if (NODES.indexOf(topicNode) === -1) {
+            log('error', '未知节点，已忽略 | ' + topic);
+            return;
+        }
+        if (!data || typeof data !== 'object' || NODES.indexOf(data.nodeId) === -1) {
+            log('error', 'nodeId 非法，已忽略 | topic=' + topic +
+                ' | nodeId=' + truncate(JSON.stringify(data && data.nodeId), 30));
+            return;
+        }
+        if (data.nodeId !== topicNode) {
+            log('error', 'Topic 与 nodeId 不一致，已忽略 | topic=' + topic + ' | nodeId=' + data.nodeId);
+            return;
+        }
+
+        var temp = Number(data.temperature);
+        var hum = Number(data.humidity);
+        if (!isFinite(temp) || !isFinite(hum)) {
+            log('error', '温湿度不是有效数值，已忽略 | ' + truncate(raw, 60));
+            return;
+        }
+
+        var status = data.status;
+        if (VALID_STATUS.indexOf(status) === -1) {
+            status = calcStatus(temp, hum);
+            log('warn', 'status 缺失或非法，已按规则重算 | ' + data.nodeId + ' -> ' + status);
+        }
+
+        updateNode(data.nodeId, temp, hum, status, data.time);
+    }
+
+    // ---------- MQTT 连接 ----------
+    function connect() {
+        var client = mqtt.connect('ws://127.0.0.1:8083/mqtt', {
+            clientId: 'dormmate-dashboard-' + Math.random().toString(16).slice(2, 8),
+            connectTimeout: 4000,
+            reconnectPeriod: 2000,
+            keepalive: 60,
+            clean: true
         });
 
-        client.on('message', (topic, message) => {
-            const data = JSON.parse(message.toString());
-            const card = document.getElementById(data.nodeId);
-            if (card) {
-                card.querySelector('.temp').innerText = data.temperature;
-                card.querySelector('.humid').innerText = data.humidity;
-                card.querySelector('.status').innerText = data.status;
+        client.on('connect', function () {
+            setBanner('ok', '已连接 Broker');
+            log('ok', '已连接到 ws://127.0.0.1:8083/mqtt');
+            // 订阅超集 Topic，才能收到并演示"Topic 写错"的消息
+            client.subscribe('dormmate/#', function (err) {
+                if (err) {
+                    log('error', '订阅失败：' + err.message);
+                } else {
+                    log('info', '已订阅 dormmate/#（仅处理 dormmate/<nodeId>/env）');
+                }
+            });
+        });
+
+        client.on('message', function (topic, message) {
+            try {
+                handleMessage(topic, message);
+            } catch (err) {
+                log('error', '处理消息时出错（已捕获）：' + err.message);
             }
         });
-    </script>
+
+        client.on('reconnect', function () {
+            setBanner('warn', '正在重连…');
+        });
+
+        client.on('close', function () {
+            setBanner('bad', '连接已断开（自动重连中）');
+            log('warn', '连接断开，等待自动重连…');
+        });
+
+        client.on('offline', function () {
+            setBanner('bad', 'Broker 离线（自动重连中）');
+        });
+
+        client.on('error', function (err) {
+            setBanner('bad', '连接错误（自动重连中）');
+            log('error', '连接错误：' + err.message);
+        });
+    }
+
+    // ---------- 初始化 ----------
+    buildCards();
+    buildTabs();
+    switchView('all');
+    setInterval(checkStale, 1000);
+    log('info', '页面已加载，开始连接 Broker…');
+    connect();
+})();
+</script>
+
 </body>
 </html>
