@@ -18,13 +18,58 @@ _parser.add_argument(
 )
 ARGS = _parser.parse_args()
 
+# 统一数据源：基础统计、趋势图、今日摘要、ML 分析全部读这同一个文件。
+# 转成绝对路径，保证从任何工作目录（含从项目根目录）执行都指向同一个文件。
+HISTORY_CSV = os.path.abspath(ARGS.history)
+
+# 输出统一落在 analysis/ 目录，不随当前工作目录漂移
+TREND_PATH = os.path.join(BASE_DIR, 'trend.png')
+REPORT_PATH = os.path.join(BASE_DIR, 'report.html')
+EVENTS_PATH = os.path.join(BASE_DIR, 'events.csv')
+
 # 解决matplotlib中文显示问题
 plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows用黑体
 plt.rcParams['axes.unicode_minus'] = False
 
+
+def read_history(path):
+    """读取历史 CSV，做统一的数据清洗。
+
+    - utf-8-sig 兼容带 BOM（Publisher 写入的格式）与不带 BOM 的文件
+    - temperature / humidity 强制转数值，非数值行丢弃，避免个别脏行拖垮整份报告
+    - 文件不存在或缺列时给出明确提示，而不是抛一堆堆栈
+    """
+    if not os.path.exists(path):
+        raise SystemExit(
+            f"[错误] 未找到历史数据文件：{path}\n"
+            f"       请先运行 python server/publisher.py 生成数据，"
+            f"或用 --history <路径> 指定其他 CSV。"
+        )
+
+    df = pd.read_csv(path, encoding='utf-8-sig')
+    df.columns = [str(c).strip() for c in df.columns]
+
+    missing = [c for c in ('temperature', 'humidity') if c not in df.columns]
+    if missing:
+        raise SystemExit(f"[错误] {path} 缺少必需列：{'、'.join(missing)}")
+
+    before = len(df)
+    df['temperature'] = pd.to_numeric(df['temperature'], errors='coerce')
+    df['humidity'] = pd.to_numeric(df['humidity'], errors='coerce')
+    df = df.dropna(subset=['temperature', 'humidity']).reset_index(drop=True)
+    dropped = before - len(df)
+    if dropped:
+        print(f"已丢弃 {dropped} 行温湿度非数值的脏数据")
+
+    if df.empty:
+        raise SystemExit(f"[错误] {path} 中没有可用的温湿度记录。")
+    return df
+
+
+print(f"数据源：{HISTORY_CSV}")
 print("正在读取 CSV 数据...")
 # 1. 读取 CSV
-df = pd.read_csv('dormmate.csv')
+df = read_history(HISTORY_CSV)
 
 # 2. 基础统计
 record_count = len(df)
@@ -68,13 +113,12 @@ plt.xlabel('记录序号')
 plt.ylabel('数值')
 plt.legend()
 plt.grid(True)
-plt.savefig('trend.png') # 保存为图片
-print("趋势图已保存为 trend.png")
+plt.savefig(TREND_PATH) # 保存为图片
+print(f"趋势图已保存为 {TREND_PATH}")
 
 # 5. 任务 B：读取实时历史数据 CSV，自动生成【今日摘要】
 #    摘要里的每个数字都来自对 CSV 的统计计算，没有任何写死的句子
 NODE_LABELS = {'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C'}
-HISTORY_CSV = ARGS.history
 
 
 def parse_ts(text):
@@ -385,7 +429,7 @@ EVENT_LEGACY_ALIASES = {
     'priorityReason': '优先原因',
     'status': '最终结果',
 }
-events_path = 'events.csv'
+events_path = EVENTS_PATH
 
 
 def event_cell(row, key):
@@ -434,6 +478,6 @@ html_content += """
 """
 
 # 写入 HTML 文件
-with open('report.html', 'w', encoding='utf-8') as f:
+with open(REPORT_PATH, 'w', encoding='utf-8') as f:
     f.write(html_content)
-print("报告已生成: report.html")
+print(f"报告已生成: {REPORT_PATH}")

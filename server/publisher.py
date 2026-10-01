@@ -9,7 +9,9 @@ status 由温湿度按统一规则自动计算，不手写。
 使"异常 → 开启风扇 → 数据回归正常 → 已恢复"形成真实闭环。
 """
 
+import csv
 import json
+import os
 import random
 import time
 from datetime import datetime
@@ -20,6 +22,21 @@ BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 PUBLISH_INTERVAL = 2
 TOPIC_TEMPLATE = "dormmate/{}/env"
+
+# 历史数据落盘：每次发布都追加一行，供 analysis/analyze.py 统一读取。
+# 路径以本文件为基准，保证从任何工作目录启动都写到同一个文件。
+HISTORY_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "node_readings_history.csv"
+)
+HISTORY_FIELDS = ("time", "node", "temperature", "humidity", "status")
+
+# 统一消息协议版本，与 shared/protocol.js 的 SCHEMA_VERSION 保持一致
+SCHEMA_VERSION = 2
+
+# Broker 连接重试参数
+CONNECT_WAIT_SECONDS = 30.0    # 启动时等待 Broker 的上限
+RECONNECT_MIN_DELAY = 1        # 断线后最小重连间隔
+RECONNECT_MAX_DELAY = 10       # 断线后最大重连间隔
 # Dashboard 下发的控制命令（本 Publisher 只订阅，不发布）
 CONTROL_TOPIC_SUBS = ("dormmate/+/fan", "dormmate/+/sim")
 NODES = ("dorm-a", "dorm-b", "dorm-c")
@@ -54,6 +71,39 @@ def calc_status(temperature, humidity):
 
 def clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def append_history(payload):
+    """把一次发布的数据追加到历史 CSV。
+
+    文件不存在或为空时先写表头；新建文件用 utf-8-sig（带 BOM，Excel 打开不乱码），
+    已存在的文件用 utf-8 追加（utf-8-sig 每次打开都会插一个 BOM，会把文件中间搞脏）。
+
+    任何写入异常都只记日志，绝不能中断 MQTT 主循环——历史文件是旁路产物，
+    它的失败不该让实时数据停更。
+    """
+    try:
+        is_new = not os.path.exists(HISTORY_PATH) or os.path.getsize(HISTORY_PATH) == 0
+        with open(
+            HISTORY_PATH,
+            "a",
+            encoding="utf-8-sig" if is_new else "utf-8",
+            newline="",
+        ) as file:
+            writer = csv.DictWriter(file, fieldnames=HISTORY_FIELDS)
+            if is_new:
+                writer.writeheader()
+            writer.writerow(
+                {
+                    "time": payload["time"],
+                    "node": payload["nodeId"],
+                    "temperature": payload["temperature"],
+                    "humidity": payload["humidity"],
+                    "status": payload["status"],
+                }
+            )
+    except OSError as exc:
+        print(f"[历史] 写入 {os.path.basename(HISTORY_PATH)} 失败，已跳过本条记录：{exc}")
 
 
 class NodeSimulator:
@@ -133,12 +183,18 @@ class NodeSimulator:
         )
 
     def build_payload(self):
+        now = datetime.now()
         return {
+            "schemaVersion": SCHEMA_VERSION,
             "nodeId": self.node_id,
             "temperature": self.temperature,
             "humidity": self.humidity,
             "status": calc_status(self.temperature, self.humidity),
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            # seq 用毫秒时间戳：跨进程重启仍单调递增，前端据此丢弃旧消息。
+            # 若用从 1 开始的自增计数，Publisher 重启后序号回落，
+            # 页面会把所有新消息误判为"过期"而全部丢弃。
+            "seq": int(now.timestamp() * 1000),
         }
 
 
@@ -153,7 +209,49 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 
 
 def on_disconnect(client, userdata, flags, reason_code, properties=None):
-    print(f"[Broker] 连接断开（reason_code={reason_code}），mqtt 库将自动重连…")
+    # 宁可吵一点：断线必须看得见，不允许 Publisher 无声失败
+    print(
+        f"[Broker] 连接断开（reason_code={reason_code}），"
+        f"{RECONNECT_MIN_DELAY}~{RECONNECT_MAX_DELAY} 秒后自动重连；"
+        f"断线期间数据仍会写入历史文件"
+    )
+
+
+def wait_for_broker(client, timeout=CONNECT_WAIT_SECONDS):
+    """等待首次连上 Broker。
+
+    用的是 connect_async + loop_start，所以 Broker 没起来也不会抛异常崩掉，
+    这里只是为了让启动日志更清楚；超时也不退出，后台会继续重连。
+    """
+    deadline = time.time() + timeout
+    while not client.is_connected() and time.time() < deadline:
+        time.sleep(0.5)
+    if client.is_connected():
+        print(f"[Broker] 已连接 {BROKER_HOST}:{BROKER_PORT}")
+        return True
+    print(
+        f"[Broker] {timeout:.0f} 秒内未连上 {BROKER_HOST}:{BROKER_PORT}，"
+        f"已转入后台持续重连（每 {RECONNECT_MIN_DELAY}~{RECONNECT_MAX_DELAY} 秒一次）"
+    )
+    return False
+
+
+def publish_env(client, topic, payload):
+    """发布一条 env 消息并检查结果。
+
+    返回 True/False。失败一律打印原因——静默丢弃是这次要修掉的问题之一。
+    """
+    if not client.is_connected():
+        print(f"[发布] 跳过 {topic}：Broker 未连接（该组数据已写入本地历史文件）")
+        return False
+
+    info = client.publish(
+        topic, json.dumps(payload, ensure_ascii=False), qos=0, retain=False
+    )
+    if info.rc != mqtt.MQTT_ERR_SUCCESS:
+        print(f"[发布] 失败 {topic}：rc={info.rc}（{mqtt.error_string(info.rc)}）")
+        return False
+    return True
 
 
 def main():
@@ -198,13 +296,25 @@ def main():
         client_id="dorm-simulator",
         protocol=mqtt.MQTTv311,
     )
+    # 断线后按 1~10 秒退避重连；Broker 中途重启也能自己恢复
+    client.reconnect_delay_set(
+        min_delay=RECONNECT_MIN_DELAY, max_delay=RECONNECT_MAX_DELAY
+    )
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
 
     print(f"正在连接 Broker {BROKER_HOST}:{BROKER_PORT} …")
-    client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
+    # connect_async + loop_start：Broker 没启动时不会抛异常退出，
+    # 而是在后台持续重试，这比 connect() 抛 OSError 直接崩掉更适合演示现场。
+    client.connect_async(BROKER_HOST, BROKER_PORT, keepalive=60)
     client.loop_start()
+    wait_for_broker(client)
+
+    print(
+        f"[历史] 每条发布都会追加到 {HISTORY_PATH}"
+        f"（写入失败只记日志，不影响 MQTT 发布）"
+    )
 
     try:
         while True:
@@ -213,13 +323,12 @@ def main():
                 payload = node.build_payload()
                 topic = TOPIC_TEMPLATE.format(node.node_id)
                 # retain=False：Dashboard 才能通过数据停更检测超时
-                client.publish(
-                    topic,
-                    json.dumps(payload, ensure_ascii=False),
-                    qos=0,
-                    retain=False,
-                )
-                print(f"[发布] {topic} -> {json.dumps(payload, ensure_ascii=False)}")
+                sent = publish_env(client, topic, payload)
+                # 无论是否真的发出，每个节点每次生成的数据都要落历史文件：
+                # Broker 断线时数据不该丢，历史链路要能独立于 MQTT 存在。
+                append_history(payload)
+                if sent:
+                    print(f"[发布] {topic} -> {json.dumps(payload, ensure_ascii=False)}")
             time.sleep(PUBLISH_INTERVAL)
     except KeyboardInterrupt:
         print("\n收到 Ctrl+C，正在停止发布…")

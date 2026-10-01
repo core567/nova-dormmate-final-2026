@@ -1,0 +1,302 @@
+/* ============================================================
+   DormMate Design System
+   Smart Dormitory Environment Center
+   ------------------------------------------------------------
+   四端（Web / Dashboard / 3D / E2 / 小程序）共用的设计 token。
+   本文件只定义变量与通用组件类，不改动任何页面已有类名的语义。
+
+   状态色口径（全项目唯一）：
+     正常  绿     偏热  红     偏湿  蓝     偏冷  琥珀     离线  灰红
+   ============================================================ */
+
+:root {
+    /* ---------- 品牌：深蓝灰 ---------- */
+    --dm-navy-900: #0b1220;
+    --dm-navy-800: #0f172a;
+    --dm-navy-700: #1e293b;
+    --dm-slate-600: #475569;
+    --dm-slate-500: #64748b;
+    --dm-slate-400: #94a3b8;
+    --dm-slate-300: #cbd5e1;
+    --dm-slate-200: #e2e8f0;
+    --dm-slate-100: #f1f5f9;
+    --dm-slate-50: #f8fafc;
+
+    /* ---------- 冰蓝 / 青绿（点缀色） ---------- */
+    --dm-ice-600: #0891b2;
+    --dm-ice-500: #06b6d4;
+    --dm-ice-400: #22d3ee;
+    --dm-ice-100: #cffafe;
+    --dm-teal-600: #0d9488;
+    --dm-teal-500: #14b8a6;
+    --dm-teal-100: #ccfbf1;
+
+    /* ---------- 语义色 ---------- */
+    --dm-bg: var(--dm-slate-100);
+    --dm-panel: #ffffff;
+    --dm-panel-alt: var(--dm-slate-50);
+    --dm-border: var(--dm-slate-200);
+    --dm-text: var(--dm-navy-700);
+    --dm-text-strong: var(--dm-navy-800);
+    --dm-muted: var(--dm-slate-500);
+    --dm-accent: var(--dm-ice-500);
+    --dm-accent-soft: var(--dm-ice-100);
+
+    /* ---------- 状态色（统一口径，不要再各页面自己定义） ---------- */
+    --dm-normal: #16a34a;       /* 正常 · 绿 */
+    --dm-hot: #dc2626;          /* 偏热 · 红 */
+    --dm-wet: #2563eb;          /* 偏湿 · 蓝 */
+    --dm-cold: #f59e0b;         /* 偏冷 · 琥珀 */
+    --dm-offline: #9f1239;      /* 离线 · 灰红 */
+    --dm-normal-soft: #dcfce7;
+    --dm-hot-soft: #fee2e2;
+    --dm-wet-soft: #dbeafe;
+    --dm-cold-soft: #fef3c7;
+    --dm-offline-soft: #ffe4e6;
+
+    /* ---------- 排版 ---------- */
+    --dm-font: "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --dm-font-mono: "Cascadia Mono", "Consolas", "SF Mono", monospace;
+    --dm-fs-xs: 12px;
+    --dm-fs-sm: 13px;
+    --dm-fs-base: 14px;
+    --dm-fs-lg: 18px;
+    --dm-fs-xl: 24px;
+    --dm-fs-display: 34px;
+
+    /* ---------- 间距 ---------- */
+    --dm-sp-1: 4px;
+    --dm-sp-2: 8px;
+    --dm-sp-3: 12px;
+    --dm-sp-4: 16px;
+    --dm-sp-5: 24px;
+    --dm-sp-6: 32px;
+
+    /* ---------- 圆角 / 阴影 ---------- */
+    --dm-radius-sm: 8px;
+    --dm-radius: 12px;
+    --dm-radius-lg: 16px;
+    --dm-shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 4px 12px rgba(15, 23, 42, .05);
+    --dm-shadow-lg: 0 8px 28px rgba(15, 23, 42, .10);
+}
+
+/* ============================================================
+   通用组件
+   ============================================================ */
+
+.dm-brand-title {
+    font-family: var(--dm-font);
+    font-weight: 700;
+    letter-spacing: .3px;
+    color: var(--dm-text-strong);
+}
+
+.dm-brand-sub {
+    font-size: var(--dm-fs-xs);
+    font-weight: 400;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    color: var(--dm-accent);
+}
+
+/* 白色信息卡 */
+.dm-card {
+    background: var(--dm-panel);
+    border: 1px solid var(--dm-border);
+    border-radius: var(--dm-radius);
+    box-shadow: var(--dm-shadow);
+    padding: var(--dm-sp-4);
+}
+
+/* 状态标签：颜色由 data-status 决定，四端同一套取值 */
+.dm-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 12px;
+    border-radius: 999px;
+    font-size: var(--dm-fs-sm);
+    font-weight: 700;
+    color: #fff;
+    background: var(--dm-slate-400);
+    white-space: nowrap;
+}
+.dm-status[data-status="正常"] { background: var(--dm-normal); }
+.dm-status[data-status="偏热"] { background: var(--dm-hot); }
+.dm-status[data-status="偏湿"] { background: var(--dm-wet); }
+.dm-status[data-status="偏冷"] { background: var(--dm-cold); }
+.dm-status[data-status="离线"] { background: var(--dm-offline); }
+
+/* 状态色文字（不填充底色时用） */
+.dm-text-normal { color: var(--dm-normal); }
+.dm-text-hot { color: var(--dm-hot); }
+.dm-text-wet { color: var(--dm-wet); }
+.dm-text-cold { color: var(--dm-cold); }
+.dm-text-offline { color: var(--dm-offline); }
+
+/* 指标块：小标题 + 大数字 */
+.dm-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.dm-metric__label {
+    font-size: var(--dm-fs-xs);
+    color: var(--dm-muted);
+    letter-spacing: .5px;
+}
+.dm-metric__value {
+    font-size: var(--dm-fs-xl);
+    font-weight: 700;
+    font-family: var(--dm-font-mono);
+    color: var(--dm-text-strong);
+    line-height: 1.15;
+}
+.dm-metric__unit {
+    font-size: var(--dm-fs-sm);
+    font-weight: 400;
+    color: var(--dm-muted);
+    margin-left: 2px;
+}
+
+/* 顶部系统状态条 */
+.dm-statusbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--dm-sp-2);
+    align-items: stretch;
+}
+.dm-statusbar__item {
+    flex: 1 1 150px;
+    background: var(--dm-panel);
+    border: 1px solid var(--dm-border);
+    border-radius: var(--dm-radius);
+    padding: 10px 14px;
+    box-shadow: var(--dm-shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.dm-statusbar__key {
+    font-size: var(--dm-fs-xs);
+    color: var(--dm-muted);
+    letter-spacing: .6px;
+}
+.dm-statusbar__val {
+    font-size: var(--dm-fs-lg);
+    font-weight: 700;
+    color: var(--dm-text-strong);
+    font-family: var(--dm-font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dm-statusbar__val.is-ok { color: var(--dm-normal); }
+.dm-statusbar__val.is-warn { color: var(--dm-cold); }
+.dm-statusbar__val.is-bad { color: var(--dm-hot); }
+
+/* 面板标题 */
+.dm-panel-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--dm-sp-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--dm-sp-3);
+}
+.dm-panel-title h2 {
+    font-size: var(--dm-fs-lg);
+    margin: 0;
+    color: var(--dm-text-strong);
+}
+.dm-panel-title .dm-panel-note {
+    font-size: var(--dm-fs-xs);
+    color: var(--dm-muted);
+}
+
+/* ============================================================
+   环境健康指数：纯 UI 综合指标，不替代固定阈值规则
+   ============================================================ */
+.dm-health {
+    display: flex;
+    align-items: center;
+    gap: var(--dm-sp-4);
+    flex-wrap: wrap;
+}
+.dm-health__score {
+    font-family: var(--dm-font-mono);
+    font-size: var(--dm-fs-display);
+    font-weight: 700;
+    line-height: 1;
+}
+.dm-health__score.is-ok { color: var(--dm-normal); }
+.dm-health__score.is-warn { color: var(--dm-cold); }
+.dm-health__score.is-bad { color: var(--dm-hot); }
+.dm-health__meta { font-size: var(--dm-fs-sm); color: var(--dm-muted); line-height: 1.7; }
+
+.dm-bar {
+    position: relative;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--dm-slate-200);
+    overflow: hidden;
+}
+.dm-bar__fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 999px;
+    background: var(--dm-accent);
+    transition: width .4s ease;
+}
+.dm-bar__fill.is-ok { background: var(--dm-normal); }
+.dm-bar__fill.is-warn { background: var(--dm-cold); }
+.dm-bar__fill.is-bad { background: var(--dm-hot); }
+
+/* ============================================================
+   异常时间轴：异常发生 → 开启风扇 → 温度变化 → 恢复
+   ============================================================ */
+.dm-timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 20px;
+    position: relative;
+}
+.dm-timeline::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background: var(--dm-slate-200);
+}
+.dm-timeline__item {
+    position: relative;
+    padding: 0 0 var(--dm-sp-4) 0;
+    font-size: var(--dm-fs-sm);
+    color: var(--dm-text);
+}
+.dm-timeline__item:last-child { padding-bottom: 0; }
+.dm-timeline__item::before {
+    content: "";
+    position: absolute;
+    left: -19px;
+    top: 5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--dm-slate-300);
+    border: 2px solid var(--dm-panel);
+}
+.dm-timeline__item[data-kind="open"]::before { background: var(--dm-cold); }
+.dm-timeline__item[data-kind="handling"]::before { background: var(--dm-accent); }
+.dm-timeline__item[data-kind="recovered"]::before { background: var(--dm-normal); }
+.dm-timeline__item[data-kind="anomaly"]::before { background: var(--dm-hot); }
+.dm-timeline__time {
+    font-family: var(--dm-font-mono);
+    color: var(--dm-muted);
+    margin-right: 8px;
+}
+.dm-timeline__title { font-weight: 700; }
+.dm-timeline__desc { color: var(--dm-muted); margin-top: 2px; }

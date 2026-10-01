@@ -31,20 +31,35 @@
     /* ---- 左上：HUD 实时数据 ---- */
     #hud {
         top: 16px; left: 16px;
-        width: 248px;
-        background: rgba(16, 21, 31, .82);
-        border: 1px solid rgba(148, 163, 184, .26);
+        width: 272px;
+        background: linear-gradient(180deg, rgba(16, 21, 31, .9), rgba(11, 18, 32, .86));
+        border: 1px solid rgba(34, 211, 238, .22);
         border-radius: 12px;
         padding: 14px 16px;
         backdrop-filter: blur(8px);
+        box-shadow: 0 8px 28px rgba(0, 0, 0, .35);
     }
-    #hud h1 { font-size: 15px; margin: 0 0 4px; }
+    #hud h1 { font-size: 15px; margin: 0 0 4px; letter-spacing: .3px; }
+    #hud .dt-sub {
+        font-size: 10px; font-weight: 400; letter-spacing: 1.6px;
+        color: #22d3ee; margin-left: 6px; vertical-align: 2px;
+    }
     #hud .sub { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
-    .hud-row { display: flex; justify-content: space-between; align-items: baseline; margin: 7px 0; font-size: 13px; }
-    .hud-row .k { color: #94a3b8; }
-    .hud-row .v { font-weight: bold; font-variant-numeric: tabular-nums; }
+    .hud-row { display: flex; justify-content: space-between; align-items: baseline; margin: 7px 0; font-size: 13px; gap: 8px; }
+    .hud-row .k {
+        color: #94a3b8; font-size: 11px; letter-spacing: .4px;
+        font-family: "Cascadia Mono", "Consolas", monospace;
+        white-space: nowrap;
+    }
+    .hud-row .v { font-weight: bold; font-variant-numeric: tabular-nums; text-align: right; }
     #hud .v.big { font-size: 19px; }
+    #hud #hudTime { font-size: 11px; }
+    #hud #hudFan { font-size: 11px; }
+    #hud #hudMqtt { font-size: 11px; }
     #hud .sep { height: 1px; background: rgba(148, 163, 184, .18); margin: 11px 0; }
+    .hud-mqtt-ok { color: #4ade80; }
+    .hud-mqtt-warn { color: #fbbf24; }
+    .hud-mqtt-bad { color: #f87171; }
 
     #statusBadge {
         display: inline-block;
@@ -146,15 +161,16 @@
 <div id="scene-container"></div>
 
 <div id="hud" class="overlay">
-    <h1>DormMate 3D 宿舍</h1>
-    <div class="sub">空间状态 · MQTT 实时</div>
-    <div class="hud-row"><span class="k">宿舍</span><span class="v" id="hudNode">dorm-a</span></div>
-    <div class="hud-row"><span class="k">温度</span><span class="v big" id="hudTemp">--</span></div>
-    <div class="hud-row"><span class="k">湿度</span><span class="v big" id="hudHumid">--</span></div>
-    <div class="hud-row"><span class="k">状态</span><span id="statusBadge">等待数据</span></div>
+    <h1>DormMate <span class="dt-sub">DIGITAL TWIN</span></h1>
+    <div class="sub">宿舍环境数字孪生 · MQTT 实时驱动</div>
+    <div class="hud-row"><span class="k">NODE · 节点</span><span class="v" id="hudNode">dorm-a</span></div>
+    <div class="hud-row"><span class="k">TEMP · 温度</span><span class="v big" id="hudTemp">--</span></div>
+    <div class="hud-row"><span class="k">HUMID · 湿度</span><span class="v big" id="hudHumid">--</span></div>
+    <div class="hud-row"><span class="k">STATUS · 状态</span><span id="statusBadge">等待数据</span></div>
     <div class="sep"></div>
-    <div class="hud-row"><span class="k">数据时间</span><span class="v" id="hudTime" style="font-size:11px">--</span></div>
-    <div class="hud-row"><span class="k">风扇转速</span><span class="v" id="hudFan" style="font-size:11px">0.00</span></div>
+    <div class="hud-row"><span class="k">FAN · 风扇</span><span class="v" id="hudFan">0.00</span></div>
+    <div class="hud-row"><span class="k">MQTT · 链路</span><span class="v" id="hudMqtt">连接中…</span></div>
+    <div class="hud-row"><span class="k">TIME · 数据</span><span class="v" id="hudTime">--</span></div>
 </div>
 
 <div id="conn-panel" class="overlay">
@@ -177,12 +193,17 @@
 <div id="fallback"></div>
 
 <!--
-  UMD 构建：普通 <script src>，在 file:// 下不受 module CORS 限制。
-  若改用 <script type="module"> 或引入本地 js 文件，页面会直接黑屏（见 docs/bug-fix.md）。
+  依赖全部本地化到 ../libs/，不依赖任何 CDN，断网也能启动 3D。
+  必须用普通 <script src>（UMD）：改成 <script type="module"> 会在 file:// 下
+  被 module CORS 拦截导致黑屏，见 docs/bug-fix.md。
 -->
-<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
-<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="../libs/three.min.js"></script>
+<script src="../libs/OrbitControls.js"></script>
+<script src="../libs/mqtt.min.js"></script>
+<!-- 统一消息协议与数据校验（单一来源，四端共用） -->
+<script src="../shared/protocol.js"></script>
+<!-- DormMate Design System（品牌与状态色统一口径） -->
+<link rel="stylesheet" href="../shared/design-system.css">
 
 <script>
 (function () {
@@ -199,26 +220,27 @@
         fb.style.display = 'block';
         fb.innerHTML = '<h2>依赖加载失败</h2>' +
             '<p>未能加载：<code>' + missing.join('、') + '</code></p>' +
-            '<p>请确认本机可以访问 unpkg.com（CDN 被墙或断网时会触发此提示）。</p>' +
-            '<p>three.js 与 mqtt.js 均通过 <code>&lt;script src&gt;</code> 引入，' +
-            '这是为了在 file:// 协议下正常工作。</p>';
+            '<p>请确认 <code>libs/</code> 目录下的文件存在：' +
+            '<code>three.min.js</code>、<code>OrbitControls.js</code>、<code>mqtt.min.js</code>。' +
+            '这些依赖已本地化，正常情况下无需联网。</p>';
         return;
     }
 
     /* =========================================================
        1. 常量与配置
        ========================================================= */
-    var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+    var P = window.DormMateProtocol;
+    var NODES = P.NODES;
     var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
     // 每个宿舍的标识色，用于选中高亮（光圈 / 轮廓线）
     var NODE_COLOR = { 'dorm-a': 0x3b82f6, 'dorm-b': 0x4ade80, 'dorm-c': 0xa855f7 };
-    var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
-    var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
-    var FAN_TOPIC_RE = /^dormmate\/([^/]+)\/fan$/;
-    var FOCUS_TOPIC = 'dormmate/focus';   // 任务 E3：跨端联动（小程序设为重点宿舍）
     var FAN_OVERRIDE_MS = 30000;   // 手动开启风扇后强制运转的时长
     var OFFLINE_MS = 10000;        // 任务 D4：超过该时长未收到数据即判定节点离线
     var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
+
+    // 每个节点最近一次收到的 seq：旧消息直接丢弃，防止旧数据覆盖新状态
+    var lastSeq = {};
+    NODES.forEach(function (id) { lastSeq[id] = null; });
 
     var ROOM = { w: 6, h: 3.1, d: 4 };            // 房间尺寸（米）
     var WIN = { x0: -1.05, x1: 0.95, y0: 1.05, y1: 2.35 };   // 窗户开口（前墙局部坐标）
@@ -244,6 +266,7 @@
     var hudHumid = document.getElementById('hudHumid');
     var hudTime = document.getElementById('hudTime');
     var hudFan = document.getElementById('hudFan');
+    var hudMqtt = document.getElementById('hudMqtt');
     var statusBadge = document.getElementById('statusBadge');
     var bannerEl = document.getElementById('banner');
     var logEl = document.getElementById('log');
@@ -278,6 +301,12 @@
     function setBanner(kind, text) {
         bannerEl.className = kind;
         bannerEl.textContent = text;
+        // 数字孪生 HUD 的 MQTT 行与右上角 banner 同源，避免两处状态说法不一致
+        if (hudMqtt) {
+            hudMqtt.textContent = { ok: '已连接', warn: '连接中', bad: '已断开' }[kind] || '未知';
+            hudMqtt.className = 'v ' +
+                (kind === 'ok' ? 'hud-mqtt-ok' : (kind === 'warn' ? 'hud-mqtt-warn' : 'hud-mqtt-bad'));
+        }
     }
 
     function lerp(a, b, t) { return a + (b - a) * t; }
@@ -773,6 +802,39 @@
     handlingRing.visible = false;
     scene.add(handlingRing);
 
+    /* ---------- 第四轮：空气流动视觉效果 ----------
+       一组固定数量的粒子表示气流。逐帧只更新一个 Float32Array，
+       不新建对象、不增加 draw call（整个气流是 1 个 Points 对象），
+       因此对性能的影响可以忽略。流动速度与风扇转速联动：
+       风扇转得越快，空气流动越明显。 */
+    var AIRFLOW_COUNT = 90;
+    var airflowPos = new Float32Array(AIRFLOW_COUNT * 3);
+    var airflowPhase = new Float32Array(AIRFLOW_COUNT);
+    var airflowRate = new Float32Array(AIRFLOW_COUNT);
+
+    for (var ai = 0; ai < AIRFLOW_COUNT; ai++) {
+        airflowPos[ai * 3] = -HALF_W + Math.random() * HALF_W * 2;
+        airflowPos[ai * 3 + 1] = 0.6 + Math.random() * (ROOM.h - 1.2);
+        airflowPos[ai * 3 + 2] = -HALF_D + Math.random() * HALF_D * 2;
+        airflowPhase[ai] = Math.random() * Math.PI * 2;
+        airflowRate[ai] = 0.5 + Math.random() * 0.7;
+    }
+
+    var airflowGeo = new THREE.BufferGeometry();
+    airflowGeo.setAttribute('position', new THREE.BufferAttribute(airflowPos, 3));
+
+    var airflowMat = new THREE.PointsMaterial({
+        color: 0x22d3ee,
+        size: 0.05,
+        transparent: true,
+        opacity: 0.36,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    var airflow = new THREE.Points(airflowGeo, airflowMat);
+    airflow.frustumCulled = false;
+    scene.add(airflow);
+
     /* =========================================================
        8. 动画状态（当前值 → 目标值，逐帧缓动）
        ========================================================= */
@@ -830,11 +892,30 @@
         lastFrameTime = now;
 
         // 转速缓动：偏热时平滑加速，恢复时平滑停转；
-        // 手动开启风扇期间强制运转（不改颜色，颜色仍由宿舍状态决定）
-        var fanOverride = Date.now() < fanOverrideUntil;
+        // 手动开启风扇期间强制运转（不改颜色，颜色仍由宿舍状态决定）。
+        // P0-七：override 按 nodeId 取，别的宿舍的命令不会让当前宿舍转动。
+        var fanOverride = Date.now() < (fanOverrideUntil[currentNode] || 0);
         var fanGoal = fanOverride ? Math.max(target.fanSpeed, 0.45) : target.fanSpeed;
         anim.fanSpeed = lerp(anim.fanSpeed, fanGoal, 1 - Math.pow(0.001, dt));
         bladeGroup.rotation.z += anim.fanSpeed * dt * 12;
+
+        // 空气流动：速度随风扇转速变化，超出房间边界即回绕，保持粒子数恒定
+        var airSpeed = (0.22 + anim.fanSpeed * 1.5) * dt;
+        var airT = now / 1000;
+        for (var ai2 = 0; ai2 < AIRFLOW_COUNT; ai2++) {
+            var idx = ai2 * 3;
+            airflowPos[idx] += airSpeed * airflowRate[ai2] * 1.8;
+            if (airflowPos[idx] > HALF_W) airflowPos[idx] = -HALF_W;
+
+            airflowPos[idx + 1] += Math.sin(airT * 1.1 + airflowPhase[ai2]) * dt * 0.18;
+            if (airflowPos[idx + 1] < 0.4) airflowPos[idx + 1] = 0.4;
+            else if (airflowPos[idx + 1] > ROOM.h - 0.5) airflowPos[idx + 1] = ROOM.h - 0.5;
+
+            airflowPos[idx + 2] += Math.cos(airT * 0.9 + airflowPhase[ai2]) * dt * 0.18;
+            if (airflowPos[idx + 2] > HALF_D) airflowPos[idx + 2] = -HALF_D;
+            else if (airflowPos[idx + 2] < -HALF_D) airflowPos[idx + 2] = HALF_D;
+        }
+        airflowGeo.attributes.position.needsUpdate = true;
 
         var k = 1 - Math.pow(0.002, dt);
         anim.fanColor.lerp(target.fanColor, k);
@@ -998,7 +1079,12 @@
         getPhase: function () { return eventPhase[currentNode]; },
         getPhaseLampColor: function () { return phaseLampMat.color.getHexString(); },
         isHandlingGlowVisible: function () { return handlingRing.visible; },
-        getLabelText: function () { return labelSprite.userData.text || ''; }
+        getLabelText: function () { return labelSprite.userData.text || ''; },
+        // 空气流动效果探针（不参与渲染）
+        getAirflowCount: function () { return airflowGeo.attributes.position.count; },
+        getAirflowHead: function () {
+            return [airflowPos[0], airflowPos[1], airflowPos[2]];
+        }
     };
 
     /* =========================================================
@@ -1044,60 +1130,61 @@
     });
 
     /* =========================================================
-       12. MQTT：消息校验
+       12. MQTT：统一路由与消息校验
+           校验规则全部来自 shared/protocol.js，本页不再自带一份
        ========================================================= */
-    /** 固定阈值规则：与 web / dashboard / publisher / analyze 保持一致。
-     *  任务 E3：status 由后端 Publisher 计算，前端正常路径直接使用其值；
-     *  此处仅在字段缺失/非法时兜底（保留 D 模块的容错验收）。 */
-    function calcStatus(temp, hum) {
-        if (temp < 18) return '偏冷';
-        if (temp >= 30) return '偏热';
-        if (hum >= 75) return '偏湿';
-        return '正常';
+    var calcStatus = P.calcStatus;
+
+    /* ---------- P1：统一消息路由 ----------
+       合法的 fan / focus 不再被当成"非法 env Topic"。 */
+    function routeMessage(topic, payloadBuffer) {
+        var raw = payloadBuffer.toString();
+        var cls = P.classifyTopic(topic);
+
+        if (cls.kind === P.KIND.UNKNOWN) {
+            log('error', '未知 Topic，已忽略 | ' + topic + '（' + cls.reason + '）');
+            return;
+        }
+        if (cls.kind === P.KIND.ENV) {
+            handleMessage(topic, raw);
+            return;
+        }
+        if (cls.kind === P.KIND.FAN) {
+            handleFanCommand(topic, raw);
+            return;
+        }
+        if (cls.kind === P.KIND.FOCUS) {
+            handleFocusCommand(topic, raw);
+            return;
+        }
+        // sim 由 Publisher 消费，本页只确认它是合法协议消息
+        log('info', '控制消息（' + cls.kind + '）已按协议接受 | ' + topic);
     }
 
-    function handleMessage(topic, payloadBuffer) {
-        var raw = payloadBuffer.toString();
-        var data;
+    function handleMessage(topic, raw) {
+        var result = P.validateEnvMessage(topic, raw);
+        if (!result.ok) {
+            log('error', result.message + ' | ' + topic);
+            return;
+        }
+        var data = result.data;
 
-        try {
-            data = JSON.parse(raw);
-        } catch (err) {
-            log('error', '非法 JSON，已忽略 | ' + topic + ' | ' + raw.slice(0, 40));
+        // P1：旧消息丢弃，防止覆盖更新的状态
+        if (P.isStaleSeq(lastSeq[data.nodeId], data.seq)) {
+            log('warn', '旧消息已丢弃 | ' + data.nodeId +
+                ' | seq=' + data.seq + ' < 已记录 ' + lastSeq[data.nodeId]);
             return;
         }
-
-        var matched = topic.match(TOPIC_RE);
-        if (!matched) {
-            log('error', 'Topic 格式不正确，已忽略 | ' + topic);
-            return;
-        }
-
-        var topicNode = matched[1];
-        if (NODES.indexOf(topicNode) === -1) {
-            log('error', '未知节点，已忽略 | ' + topic);
-            return;
-        }
-        if (!data || typeof data !== 'object' || NODES.indexOf(data.nodeId) === -1) {
-            log('error', 'nodeId 非法，已忽略 | topic=' + topic);
-            return;
-        }
-        if (data.nodeId !== topicNode) {
-            log('error', 'Topic 与 nodeId 不一致，已忽略 | ' + topic + ' vs ' + data.nodeId);
-            return;
+        if (data.seq !== null) {
+            lastSeq[data.nodeId] = data.seq;
         }
 
-        var temp = Number(data.temperature);
-        var hum = Number(data.humidity);
-        if (!isFinite(temp) || !isFinite(hum)) {
-            log('error', '温湿度不是有效数值，已忽略 | ' + raw.slice(0, 40));
-            return;
-        }
-
+        var temp = data.temperature;
+        var hum = data.humidity;
         var status = data.status;
-        if (VALID_STATUS.indexOf(status) === -1) {
+        if (!data.statusValid) {
             status = calcStatus(temp, hum);
-            log('warn', 'status 缺失或非法，已按规则重算 | ' + data.nodeId + ' -> ' + status);
+            log('warn', 'status 缺失或非法，已按统一规则重算 | ' + data.nodeId + ' -> ' + status);
         }
 
         nodeCache[data.nodeId] = {
@@ -1132,59 +1219,42 @@
        Topic: dormmate/<nodeId>/fan   Payload: {"nodeId":..,"command":"on"}
        仅新增处理分支，不影响上方 env 消息的接收与 updateScene 逻辑。
        风扇颜色仍由宿舍状态决定，命令只强制运转、不改颜色。 */
-    var fanOverrideUntil = 0;
+    /* P0-七：手动开启风扇的强制运转截止时间，必须按宿舍隔离。
+       以前是一个全局变量，给 dorm-a 开风扇后切到 dorm-b，dorm-b 会跟着转。
+       现在每个宿舍各存一份，动画只读 currentNode 的那一份。 */
+    var fanOverrideUntil = {};
+    NODES.forEach(function (id) { fanOverrideUntil[id] = 0; });
 
     // 任务 D4：节点离线检测状态（只跟踪当前选中的宿舍）
     var offlineFlag = false;
 
-    function handleFanCommand(topic, payloadBuffer) {
-        var matched = topic.match(FAN_TOPIC_RE);
-        if (!matched) return;
-
-        var nodeId = matched[1];
-        if (NODES.indexOf(nodeId) === -1) {
-            log('error', '风扇命令：未知节点，已忽略 | ' + topic);
+    function handleFanCommand(topic, raw) {
+        var result = P.validateControlMessage(topic, raw);
+        if (!result.ok) {
+            log('error', '风扇命令非法，已忽略 | ' + result.message);
             return;
         }
-
-        var command;
-        try {
-            command = JSON.parse(payloadBuffer.toString());
-        } catch (err) {
-            log('error', '风扇命令：不是合法 JSON，已忽略 | ' + payloadBuffer.toString().slice(0, 40));
-            return;
-        }
-        if (!command || command.command !== 'on') {
-            log('warn', '风扇命令：未知指令，已忽略 | ' + topic);
-            return;
-        }
+        var nodeId = P.classifyTopic(topic).nodeId;
 
         if (nodeId !== currentNode) {
-            log('info', '风扇命令：' + nodeId + ' 非当前宿舍，已忽略');
-            return;
+            log('info', '风扇命令：' + nodeId + ' 非当前宿舍，已记录待切换后生效');
         }
 
-        fanOverrideUntil = Date.now() + FAN_OVERRIDE_MS;
+        // 命令按 nodeId 落账，动画只认 currentNode 的那一份
+        fanOverrideUntil[nodeId] = Date.now() + FAN_OVERRIDE_MS;
         setPhase(nodeId, 'handling');       // 升级②：事件进入「处理中」
-        log('ok', '收到手动开启风扇命令，风扇将运转 ' + (FAN_OVERRIDE_MS / 1000) + ' 秒');
+        log('ok', nodeId + ' 收到手动开启风扇命令，风扇将运转 ' + (FAN_OVERRIDE_MS / 1000) + ' 秒');
     }
 
-    /* ---------- 任务 E3 新增：跨端联动 ----------
-       Topic: dormmate/focus   Payload: {"nodeId":..,"source":"miniapp","time":..}
-       小程序设为重点宿舍后，本页同步选中该宿舍。
-       复用 selectNode，自动带出高亮光圈、镜头聚焦与浮空标签。 */
-    function handleFocusCommand(payloadBuffer) {
-        var cmd;
-        try {
-            cmd = JSON.parse(payloadBuffer.toString());
-        } catch (err) {
-            log('error', 'focus 消息不是合法 JSON，已忽略');
+    /* ---------- 任务 E3：跨端联动（校验统一走 shared/protocol.js）----------
+       Topic: dormmate/focus   Payload: {"nodeId":..,"source":"miniapp","time":..} */
+    function handleFocusCommand(topic, raw) {
+        var result = P.validateControlMessage(topic, raw);
+        if (!result.ok) {
+            log('error', 'focus 消息非法，已忽略 | ' + result.message);
             return;
         }
-        if (!cmd || NODES.indexOf(cmd.nodeId) === -1) {
-            log('error', 'focus 消息的 nodeId 非法，已忽略');
-            return;
-        }
+        var cmd = result.data;
         if (cmd.nodeId === currentNode) {
             log('info', '联动消息：' + cmd.nodeId + ' 已经是当前宿舍');
             return;
@@ -1228,17 +1298,7 @@
 
         client.on('message', function (topic, message) {
             try {
-                // 任务 E3 新增分支：跨端联动（小程序设为重点宿舍）
-                if (topic === FOCUS_TOPIC) {
-                    handleFocusCommand(message);
-                    return;
-                }
-                // 任务 A 新增分支：风扇控制命令；其余消息仍走原有 env 处理逻辑
-                if (FAN_TOPIC_RE.test(topic)) {
-                    handleFanCommand(topic, message);
-                    return;
-                }
-                handleMessage(topic, message);
+                routeMessage(topic, message);
             } catch (err) {
                 log('error', '处理消息时出错（已捕获）：' + err.message);
             }

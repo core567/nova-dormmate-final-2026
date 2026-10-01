@@ -4,22 +4,30 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DormMate 实时 Dashboard</title>
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<!-- 依赖本地化到 ../libs/，不依赖 CDN -->
+<script src="../libs/mqtt.min.js"></script>
+<script src="../libs/chart.umd.js"></script>
+<!-- 统一消息协议与数据校验（单一来源，四端共用） -->
+<script src="../shared/protocol.js"></script>
+<!-- DormMate Design System（品牌与状态色统一口径） -->
+<link rel="stylesheet" href="../shared/design-system.css">
 <style>
     :root {
-        --bg: #f1f5f9;
-        --panel: #ffffff;
-        --border: #e2e8f0;
-        --text: #1e293b;
-        --muted: #64748b;
-        --ok: #16a34a;
-        --warn: #f59e0b;
-        --bad: #dc2626;
-        --cold: #2563eb;
-        --hot: #dc2626;
-        --wet: #ea580c;
-        --normal: #16a34a;
+        /* 设计 token 全部来自 shared/design-system.css，这里只作本地别名。
+           注意状态色口径：偏湿 = 蓝、偏冷 = 琥珀 —— 原先本页把这两个写反了。 */
+        --bg: var(--dm-bg);
+        --panel: var(--dm-panel);
+        --border: var(--dm-border);
+        --text: var(--dm-text);
+        --muted: var(--dm-muted);
+        --ok: var(--dm-normal);
+        --warn: var(--dm-cold);
+        --bad: var(--dm-hot);
+        --normal: var(--dm-normal);
+        --hot: var(--dm-hot);
+        --wet: var(--dm-wet);
+        --cold: var(--dm-cold);
+        --offline: var(--dm-offline);
     }
 
     * { box-sizing: border-box; }
@@ -340,9 +348,32 @@
 <body>
 
 <header>
-    <h1>DormMate 实时 Dashboard <small>MQTT · ws://127.0.0.1:8083/mqtt</small></h1>
+    <h1 class="dm-brand-title">DormMate
+        <span class="dm-brand-sub">Smart Dormitory Environment Center</span>
+        <small>实时 Dashboard · ws://127.0.0.1:8083/mqtt</small>
+    </h1>
     <div class="banner warn" id="banner">正在连接 Broker…</div>
 </header>
+
+<!-- 顶部系统状态 -->
+<div class="dm-statusbar" id="statusBar">
+    <div class="dm-statusbar__item">
+        <span class="dm-statusbar__key">MQTT 链路</span>
+        <span class="dm-statusbar__val" id="sbMqtt">连接中…</span>
+    </div>
+    <div class="dm-statusbar__item">
+        <span class="dm-statusbar__key">当前重点宿舍</span>
+        <span class="dm-statusbar__val" id="sbFocus">全部宿舍</span>
+    </div>
+    <div class="dm-statusbar__item">
+        <span class="dm-statusbar__key">环境健康指数</span>
+        <span class="dm-statusbar__val" id="sbHealth">—</span>
+    </div>
+    <div class="dm-statusbar__item">
+        <span class="dm-statusbar__key">数据质量</span>
+        <span class="dm-statusbar__val" id="sbQuality">—</span>
+    </div>
+</div>
 
 <div class="priority-panel none" id="priorityPanel">
     <div class="priority-main">
@@ -363,6 +394,22 @@
     </div>
     <div class="situation" id="situationText">等待数据…</div>
     <div class="rank-list" id="rankList"></div>
+</div>
+
+<!-- 环境健康指数：纯 UI 综合指标，不参与状态判定 -->
+<div class="panel">
+    <div class="dm-panel-title">
+        <h2>环境健康指数</h2>
+        <span class="dm-panel-note">
+            仅作展示的综合指标（全局 = 各宿舍均值 × 0.5 + 最差宿舍 × 0.5）；
+            状态判定仍以固定阈值规则为准，温度优先
+        </span>
+    </div>
+    <div class="dm-health">
+        <div class="dm-health__score is-ok" id="healthScore">--</div>
+        <div class="dm-health__meta" id="healthMeta">等待数据…</div>
+    </div>
+    <div id="healthList" style="margin-top: 16px;"></div>
 </div>
 
 <div class="cards" id="cards"></div>
@@ -388,6 +435,15 @@
     <table class="event-table" id="eventTable"></table>
 </div>
 
+<!-- 异常时间轴：异常发生 → 开启风扇 → 温度变化 → 恢复 -->
+<div class="panel">
+    <div class="dm-panel-title">
+        <h2>异常时间轴</h2>
+        <span class="dm-panel-note" id="timelineNode">按当前查看的宿舍展示</span>
+    </div>
+    <ul class="dm-timeline" id="timeline"></ul>
+</div>
+
 <div class="panel">
     <div class="log-head">
         <h2>链路日志（任务 D4 · 持久化）</h2>
@@ -404,13 +460,18 @@
 (function () {
     'use strict';
 
+    // CDN 依赖可用性：mqtt.js / chart.js 任一加载失败时，
+    // 页面其余功能（卡片、事件日志、导出、TTS）都必须照常可用，
+    // 不能因为一个外部脚本没下来就整页抛 ReferenceError。
+    var HAS_MQTT = (typeof mqtt !== 'undefined');
+    var HAS_CHART = (typeof Chart !== 'undefined');
+
     // ---------- 常量 ----------
-    var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+    // 消息协议与校验规则统一来自 shared/protocol.js，本页不再自带一份
+    var P = window.DormMateProtocol;
+    var NODES = P.NODES;
     var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
     var NODE_COLOR = { 'dorm-a': '#2563eb', 'dorm-b': '#16a34a', 'dorm-c': '#a855f7' };
-    var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
-    var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
-    var FOCUS_TOPIC = 'dormmate/focus';   // 任务 E3：跨端联动（小程序设为重点宿舍）
     var MAX_POINTS = 60;
     var MAX_LOG = 50;
     var STALE_MS = 10000;              // 超过该时长未收到数据，判定节点离线
@@ -420,6 +481,10 @@
     // 任务 D4：节点在线状态（仅在状态翻转时写链路日志，避免每秒重复记录）
     var offlineState = {};
     NODES.forEach(function (id) { offlineState[id] = false; });
+
+    // 每个节点最近一次收到的 seq：比它旧的 MQTT 消息直接丢弃，防止旧数据覆盖新状态
+    var lastSeq = {};
+    NODES.forEach(function (id) { lastSeq[id] = null; });
 
     // ---------- 状态：每个节点一份独立数据，互不串号 ----------
     var state = {};
@@ -460,6 +525,24 @@
 
     // 已完成的异常事件，持久化到 localStorage，刷新页面不丢
     var events = loadEvents();
+
+    /* P0-六：event_id 不能在刷新后从 evt-xxx-01 重新开始。
+       从已归档事件里恢复每个宿舍的最大序号，新的异常段接着往下编号，
+       保证同一宿舍的历史事件 ID 全局唯一（旧的 evt-legacy-N 不参与编号）。 */
+    function seedEventSeq() {
+        var seq = {};
+        NODES.forEach(function (id) { seq[id] = 0; });
+        events.forEach(function (r) {
+            var m = /^evt-(.+)-(\d+)$/.exec(String(r.event_id || ''));
+            if (m && Object.prototype.hasOwnProperty.call(seq, m[1])) {
+                var n = parseInt(m[2], 10);
+                if (n > seq[m[1]]) seq[m[1]] = n;
+            }
+        });
+        return seq;
+    }
+    var eventSeq = seedEventSeq();
+
     var priorityNode = null;
     var toastTimer = null;
     var mqttClient = null;
@@ -480,6 +563,17 @@
     var ttsBtn = document.getElementById('ttsBtn');
     var linkLogEl = document.getElementById('linkLog');
     var exportLinkLogBtn = document.getElementById('exportLinkLogBtn');
+    // 第四轮新增：顶部系统状态 / 环境健康指数 / 异常时间轴
+    var sbMqttEl = document.getElementById('sbMqtt');
+    var sbFocusEl = document.getElementById('sbFocus');
+    var sbHealthEl = document.getElementById('sbHealth');
+    var sbQualityEl = document.getElementById('sbQuality');
+    var healthScoreEl = document.getElementById('healthScore');
+    var healthMetaEl = document.getElementById('healthMeta');
+    var healthListEl = document.getElementById('healthList');
+    var timelineEl = document.getElementById('timeline');
+    var timelineNodeEl = document.getElementById('timelineNode');
+    var mqttState = 'connecting';     // connecting / online / offline / manual
 
     // ---------- 通用工具 ----------
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
@@ -495,11 +589,6 @@
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-    function truncate(text, len) {
-        text = String(text);
-        return text.length > len ? text.slice(0, len) + '…' : text;
-    }
-
     function log(level, text) {
         var line = document.createElement('div');
         line.className = 'log-line log-' + level;
@@ -511,15 +600,10 @@
         }
     }
 
-    // 状态兜底规则，与 web/script.js 及 Publisher 保持一致（温度优先）。
+    // 状态兜底规则统一来自 shared/protocol.js（全项目唯一实现）。
     // 任务 E3：正常情况下 status 一律采用后端 Publisher 计算的值，前端不自行重算；
     // 仅在 MQTT 消息缺少合法 status 时兜底（保留 D 模块的容错验收）。
-    function calcStatus(temp, hum) {
-        if (temp < 18) return '偏冷';
-        if (temp >= 30) return '偏热';
-        if (hum >= 75) return '偏湿';
-        return '正常';
-    }
+    var calcStatus = P.calcStatus;
 
     function setBanner(kind, text) {
         bannerEl.className = 'banner ' + kind;
@@ -720,8 +804,12 @@
                 saveEvents();
                 log('ok', nodeId + ' 数据恢复正常，事件 ' + ep.eventId + ' 已归档');
                 t.episode = null;
+                t.phase = 'recovered';       // HANDLING → 后续数据正常 → RECOVERED
+            } else if (t.anomalyCount === 0) {
+                t.phase = 'normal';          // 从未发生过异常，保持「正常」
             }
-            t.phase = 'recovered';
+            // 已经恢复过（anomalyCount > 0 且无进行中的异常段）则停留在「已恢复」，
+            // 等下一次异常才转 OPEN——不能因为又收到一条正常数据就回退成「正常」。
             t.newDataSinceAction = 0;
             t.verifyData = [];
             return;
@@ -729,8 +817,9 @@
 
         if (!t.episode) {
             t.anomalyCount += 1;
+            eventSeq[nodeId] += 1;
             t.episode = {
-                eventId: 'evt-' + nodeId + '-' + pad(t.anomalyCount),
+                eventId: 'evt-' + nodeId + '-' + pad(eventSeq[nodeId]),
                 startTs: Date.now(),
                 startTime: stamp,
                 type: status,
@@ -758,7 +847,9 @@
         }
     }
 
-    /* ---- A2：开启风扇（只把状态推到"处理中"，恢复仍由数据决定）---- */
+    /* ---- A2：开启风扇（只把状态推到"处理中"，恢复仍由数据决定）----
+       P0-五：必须确认命令真的发出去了才进入 HANDLING。
+       未连接、发布失败、发布抛异常，三种情况都留在 OPEN，绝不假装"处理中"。 */
     function startFan(nodeId) {
         var t = taskA[nodeId];
         if (!t.episode || t.phase !== 'open') {
@@ -766,24 +857,50 @@
             return;
         }
 
-        var st = nowTime();
-        t.episode.fanActionTime = st;
-        t.phase = 'handling';
-        t.newDataSinceAction = 0;
-        t.verifyData = [];
-
-        if (mqttClient && mqttClient.connected) {
-            mqttClient.publish('dormmate/' + nodeId + '/fan',
-                JSON.stringify({ nodeId: nodeId, command: 'on', time: nowStamp() }));
-            log('ok', nodeId + ' 已下发开启风扇命令 → dormmate/' + nodeId + '/fan');
-        } else {
-            log('error', nodeId + ' 开启风扇失败：MQTT 未连接');
+        if (!mqttClient || !mqttClient.connected) {
+            log('error', nodeId + ' 开启风扇失败：MQTT 未连接，状态保持「待处理」');
+            addLinkLog('fault', nodeId, '开启风扇失败：MQTT 未连接，未进入处理中');
+            showToast('MQTT 未连接，风扇命令未发出（' + NODE_LABEL[nodeId] + '）');
+            return;
         }
 
-        showToast('处理中，风扇已开启（' + NODE_LABEL[nodeId] + '）');
-        renderCard(nodeId);
-        renderEvents();
-        recomputePriority();
+        function onFanPublished(err) {
+            if (err) {
+                log('error', nodeId + ' 开启风扇失败：' + err.message + '，状态保持「待处理」');
+                addLinkLog('fault', nodeId, '开启风扇发布失败：' + err.message);
+                showToast('风扇命令发送失败（' + NODE_LABEL[nodeId] + '）');
+                return;
+            }
+            t.episode.fanActionTime = nowTime();
+            t.phase = 'handling';
+            t.newDataSinceAction = 0;
+            t.verifyData = [];
+            log('ok', nodeId + ' 已下发开启风扇命令 → dormmate/' + nodeId + '/fan');
+            showToast('处理中，风扇已开启（' + NODE_LABEL[nodeId] + '）');
+            renderCard(nodeId);
+            renderEvents();
+            recomputePriority();
+        }
+
+        try {
+            // QoS 1 + 回调：PUBACK 到达才算命令发出成功
+            mqttClient.publish(
+                'dormmate/' + nodeId + '/fan',
+                JSON.stringify({
+                    schemaVersion: P.SCHEMA_VERSION,
+                    nodeId: nodeId,
+                    command: 'on',
+                    time: nowStamp(),
+                    seq: P.nextSeq()
+                }),
+                { qos: 1 },
+                onFanPublished
+            );
+        } catch (err) {
+            log('error', nodeId + ' 开启风扇失败：' + err.message + '，状态保持「待处理」');
+            addLinkLog('fault', nodeId, '开启风扇异常：' + err.message);
+            showToast('风扇命令发送失败（' + NODE_LABEL[nodeId] + '）');
+        }
     }
 
     /* ---- D3：事件明细（已完成的 + 进行中的），共 9 个字段 ---- */
@@ -1103,6 +1220,196 @@
         });
     }
 
+    /* =========================================================
+       第四轮：顶部系统状态 / 环境健康指数 / 异常时间轴
+       健康指数是纯 UI 综合指标，不参与也不替代固定阈值规则
+       ========================================================= */
+    function healthScoreOf(nodeId) {
+        var s = state[nodeId];
+        if (s.temperature === null) return null;
+
+        var t = s.temperature;
+        var h = s.humidity;
+        var score = 100;
+
+        // 偏离舒适区间的程度：越界越多扣越多
+        if (t < 18) score -= Math.min(45, (18 - t) * 6);
+        else if (t >= 30) score -= Math.min(45, (t - 30) * 6);
+        else if (t > 26) score -= (t - 26) * 2;      // 逼近偏热阈值，轻微扣分
+
+        if (h >= 75) score -= Math.min(30, (h - 75) * 3);
+        else if (h > 65) score -= (h - 65) * 0.8;
+
+        if (offlineState[nodeId]) score -= 25;        // 数据停更本身就是风险
+
+        return Math.max(0, Math.round(score));
+    }
+
+    function healthClass(score) {
+        if (score === null) return 'is-warn';
+        if (score >= 80) return 'is-ok';
+        if (score >= 55) return 'is-warn';
+        return 'is-bad';
+    }
+
+    function overallHealth() {
+        var scores = [];
+        NODES.forEach(function (id) {
+            var v = healthScoreOf(id);
+            if (v !== null) scores.push(v);
+        });
+        if (!scores.length) return null;
+        var avg = scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
+        return Math.round(avg * 0.5 + Math.min.apply(null, scores) * 0.5);
+    }
+
+    function renderHealth() {
+        var overall = overallHealth();
+        healthScoreEl.textContent = overall === null ? '--' : overall;
+        healthScoreEl.className = 'dm-health__score ' + healthClass(overall);
+
+        var scores = [];
+        NODES.forEach(function (id) {
+            var v = healthScoreOf(id);
+            if (v !== null) scores.push(v);
+        });
+        if (!scores.length) {
+            healthMetaEl.textContent = '等待数据…';
+        } else {
+            var offlineCount = NODES.filter(function (id) { return offlineState[id]; }).length;
+            var avg = Math.round(scores.reduce(function (a, b) { return a + b; }, 0) / scores.length);
+            healthMetaEl.innerHTML =
+                '全局指数 <strong>' + overall + '</strong> / 100　·　各宿舍均值 ' + avg +
+                '　·　最差 ' + Math.min.apply(null, scores) +
+                (offlineCount ? '　·　<span class="dm-text-offline">' + offlineCount + ' 个节点离线</span>' : '') +
+                '<br>该指数只反映偏离舒适区间的程度，不代表状态判定结果';
+        }
+
+        healthListEl.innerHTML = NODES.map(function (id) {
+            var v = healthScoreOf(id);
+            var s = state[id];
+            var detail = s.temperature === null
+                ? '等待数据'
+                : (s.temperature.toFixed(1) + '℃ / ' + s.humidity.toFixed(1) + '% · ' +
+                   (offlineState[id] ? '节点离线' : (s.status || '—')));
+            return '<div style="margin-bottom:10px">' +
+                '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">' +
+                '<span>' + NODE_LABEL[id] +
+                ' <span style="color:var(--muted)">· ' + detail + '</span></span>' +
+                '<span style="font-family:var(--dm-font-mono);font-weight:bold">' +
+                (v === null ? '--' : v) + '</span></div>' +
+                '<div class="dm-bar"><div class="dm-bar__fill ' + healthClass(v) +
+                '" style="width:' + (v === null ? 0 : v) + '%"></div></div></div>';
+        }).join('');
+    }
+
+    function renderStatusBar() {
+        var MQTT_TEXT = {
+            connecting: '连接中…', online: '已连接',
+            offline: '已断开（重连中）', manual: '已手动断开', nolib: '依赖未加载'
+        };
+        sbMqttEl.textContent = MQTT_TEXT[mqttState] || '未知';
+        sbMqttEl.className = 'dm-statusbar__val ' +
+            (mqttState === 'online' ? 'is-ok'
+                : (mqttState === 'connecting' ? 'is-warn' : 'is-bad'));
+
+        sbFocusEl.textContent = currentView === 'all' ? '全部宿舍' : NODE_LABEL[currentView];
+
+        var overall = overallHealth();
+        sbHealthEl.textContent = overall === null ? '—' : (overall + ' / 100');
+        sbHealthEl.className = 'dm-statusbar__val ' + healthClass(overall);
+
+        var stale = NODES.filter(function (id) { return offlineState[id]; }).length;
+        var noData = NODES.filter(function (id) { return state[id].lastUpdate === null; }).length;
+        sbQualityEl.textContent = noData === NODES.length
+            ? '暂无数据'
+            : (stale ? stale + ' / 3 节点离线' : '3 / 3 节点在线');
+        sbQualityEl.className = 'dm-statusbar__val ' +
+            (stale ? 'is-bad' : (noData ? 'is-warn' : 'is-ok'));
+    }
+
+    /* 时间轴：异常发生 → 开启风扇 → 温度变化 → 恢复 */
+    function renderTimeline() {
+        var nodeId = currentView === 'all' ? priorityNode : currentView;
+        if (!nodeId) {
+            timelineNodeEl.textContent = '当前无进行中的异常';
+            timelineEl.innerHTML = '<li class="dm-timeline__item">' +
+                '<div class="dm-timeline__title">暂无异常事件</div>' +
+                '<div class="dm-timeline__desc">切到某个宿舍标签页，或等待出现异常</div></li>';
+            return;
+        }
+        timelineNodeEl.textContent = NODE_LABEL[nodeId] + '（' + nodeId + '）';
+
+        var t = taskA[nodeId];
+        var items = [];
+
+        if (t.episode) {
+            items.push({
+                kind: 'anomaly', time: t.episode.startTime,
+                title: '异常发生 · ' + t.episode.type,
+                desc: '按固定阈值规则判定为「' + t.episode.type + '」，事件 ' + t.episode.eventId
+            });
+            if (t.episode.fanActionTime) {
+                items.push({
+                    kind: 'handling', time: t.episode.fanActionTime,
+                    title: '开启风扇',
+                    desc: '命令经 MQTT 下发成功，状态进入「处理中」'
+                });
+                t.verifyData.forEach(function (v, i) {
+                    items.push({
+                        kind: 'handling', time: '验证 ' + (i + 1),
+                        title: '温度变化 · ' + v,
+                        desc: '处理中收到的新数据'
+                    });
+                });
+                items.push({
+                    kind: 'handling', time: '等待',
+                    title: '等待恢复',
+                    desc: '必须收到「正常」数据才判定恢复，点按钮不会直接恢复'
+                });
+            }
+        } else {
+            var archived = null;
+            for (var i = events.length - 1; i >= 0; i--) {
+                if (events[i].nodeId === nodeId) { archived = events[i]; break; }
+            }
+            if (!archived) {
+                timelineEl.innerHTML = '<li class="dm-timeline__item">' +
+                    '<div class="dm-timeline__title">暂无异常记录</div>' +
+                    '<div class="dm-timeline__desc">' + NODE_LABEL[nodeId] +
+                    ' 尚未发生过异常</div></li>';
+                return;
+            }
+            items.push({
+                kind: 'anomaly', time: archived.startTime,
+                title: '异常发生 · ' + archived.type,
+                desc: '事件 ' + archived.event_id
+            });
+            items.push({
+                kind: 'handling', time: '处置',
+                title: archived.userAction || '无处置动作',
+                desc: archived.priorityReason || '—'
+            });
+            if (archived.verifyData && archived.verifyData !== '—') {
+                items.push({
+                    kind: 'handling', time: '验证',
+                    title: '过程数据', desc: archived.verifyData
+                });
+            }
+            items.push({
+                kind: 'recovered', time: archived.recoverTime,
+                title: '已恢复', desc: '收到「正常」数据，事件已归档'
+            });
+        }
+
+        timelineEl.innerHTML = items.map(function (it) {
+            return '<li class="dm-timeline__item" data-kind="' + it.kind + '">' +
+                '<span class="dm-timeline__time">' + escapeHtml(it.time) + '</span>' +
+                '<span class="dm-timeline__title">' + escapeHtml(it.title) + '</span>' +
+                '<div class="dm-timeline__desc">' + escapeHtml(it.desc) + '</div></li>';
+        }).join('');
+    }
+
     // ---------- 图表 ----------
     function alignSeries(arr, len) {
         if (arr.length === len) return arr.slice();
@@ -1178,6 +1485,8 @@
 
     // 切换视图时整体重建，避免双轴配置残留在单轴视图上
     function buildChart() {
+        // chart.js 来自 CDN，加载失败时只放弃趋势图，卡片/事件/日志照常工作
+        if (!HAS_CHART) return;
         if (chart) { chart.destroy(); chart = null; }
         chart = new Chart(document.getElementById('chart'), {
             type: 'line',
@@ -1187,6 +1496,7 @@
     }
 
     function refreshChart() {
+        if (!HAS_CHART) return;
         if (!chart) { buildChart(); return; }
         var d = chartData();
         chart.data.labels = d.labels;
@@ -1214,24 +1524,21 @@
         });
         NODES.forEach(renderCard);
         buildChart();
+        // 时间轴跟随当前查看的宿舍
+        renderTimeline();
+        renderStatusBar();
     }
 
-    /* ---------- 任务 E3 新增：跨端联动 ----------
-       Topic: dormmate/focus   Payload: {"nodeId":..,"source":"miniapp","time":..}
-       小程序把某个宿舍设为重点后，本页切换到该宿舍的视图。
-       复用 switchView，自动带出 tab 高亮与图表切换。 */
-    function handleFocusCommand(payloadBuffer) {
-        var cmd;
-        try {
-            cmd = JSON.parse(payloadBuffer.toString());
-        } catch (err) {
-            log('error', 'focus 消息不是合法 JSON，已忽略');
+    /* ---------- 任务 E3：跨端联动（校验统一走 shared/protocol.js）----------
+       Topic: dormmate/focus   Payload: {"nodeId":..,"source":"miniapp","time":..} */
+    function handleFocusCommand(topic, raw) {
+        var result = P.validateControlMessage(topic, raw);
+        if (!result.ok) {
+            log('error', 'focus 消息非法，已忽略 | ' + result.message);
+            addLinkLog('fault', topic, 'focus 消息非法：' + result.message);
             return;
         }
-        if (!cmd || NODES.indexOf(cmd.nodeId) === -1) {
-            log('error', 'focus 消息的 nodeId 非法，已忽略');
-            return;
-        }
+        var cmd = result.data;
         if (cmd.nodeId === currentView) {
             log('info', '联动消息：' + cmd.nodeId + ' 已经是当前查看的宿舍');
             return;
@@ -1271,62 +1578,94 @@
         renderRank();
         checkStale();
         refreshChart();
+        renderStatusBar();
+        renderHealth();
+        renderTimeline();
     }
 
-    // ---------- 消息校验：任何非法数据只记日志，绝不让页面崩溃 ----------
-    function handleMessage(topic, payloadBuffer) {
+    /* ---------- P1：统一消息路由 ----------
+       先用 shared/protocol.js 认识 Topic 的形状，再分发：
+         dormmate/<node>/env    → handleEnvMessage
+         dormmate/focus         → handleFocusCommand
+         dormmate/<node>/fan|sim→ 合法控制消息，本页确认即可（由 Publisher 消费）
+         其他                    → 唯一的"未知 Topic"，才记 fault
+       这样合法的 fan/sim/focus 不会再被误判成"非法 env Topic"。 */
+    function routeMessage(topic, payloadBuffer) {
         var raw = payloadBuffer.toString();
+        var cls = P.classifyTopic(topic);
 
-        var data;
-        try {
-            data = JSON.parse(raw);
-        } catch (err) {
-            log('error', '非法 JSON，已忽略 | topic=' + topic + ' | payload=' + truncate(raw, 60));
-            addLinkLog('fault', topic, '非法 JSON，已忽略：' + truncate(raw, 40));
+        if (cls.kind === P.KIND.UNKNOWN) {
+            log('error', '未知 Topic，已忽略 | ' + topic + '（' + cls.reason + '）');
+            addLinkLog('fault', topic, '未知 Topic：' + cls.reason);
             return;
         }
 
-        var matched = topic.match(TOPIC_RE);
-        if (!matched) {
-            log('error', 'Topic 格式不正确，已忽略 | ' + topic);
-            addLinkLog('fault', topic, 'Topic 格式不正确，已忽略');
+        if (cls.kind === P.KIND.ENV) {
+            handleEnvMessage(topic, raw);
             return;
         }
 
-        var topicNode = matched[1];
-        if (NODES.indexOf(topicNode) === -1) {
-            log('error', '未知节点，已忽略 | ' + topic);
-            addLinkLog('fault', topic, '未知节点，已忽略');
-            return;
-        }
-        if (!data || typeof data !== 'object' || NODES.indexOf(data.nodeId) === -1) {
-            log('error', 'nodeId 非法，已忽略 | topic=' + topic +
-                ' | nodeId=' + truncate(JSON.stringify(data && data.nodeId), 30));
-            return;
-        }
-        if (data.nodeId !== topicNode) {
-            log('error', 'Topic 与 nodeId 不一致，已忽略 | topic=' + topic + ' | nodeId=' + data.nodeId);
+        if (cls.kind === P.KIND.FOCUS) {
+            handleFocusCommand(topic, raw);
             return;
         }
 
-        var temp = Number(data.temperature);
-        var hum = Number(data.humidity);
-        if (!isFinite(temp) || !isFinite(hum)) {
-            log('error', '温湿度不是有效数值，已忽略 | ' + truncate(raw, 60));
+        // fan / sim：合法协议消息，本页只做校验与记录，不记 fault
+        var ctrl = P.validateControlMessage(topic, raw);
+        if (!ctrl.ok) {
+            log('error', '控制消息非法，已忽略 | ' + topic + ' | ' + ctrl.message);
+            addLinkLog('fault', topic, '控制消息非法：' + ctrl.message);
             return;
+        }
+        log('info', '控制消息（' + cls.kind + '）已按协议接受 | ' + topic);
+    }
+
+    /* ---------- 消息校验：任何非法数据只记日志，绝不让页面崩溃 ---------- */
+    function handleEnvMessage(topic, raw) {
+        var result = P.validateEnvMessage(topic, raw);
+        if (!result.ok) {
+            log('error', result.message + ' | ' + topic);
+            addLinkLog('fault', topic, result.message);
+            return;
+        }
+        var data = result.data;
+
+        // P1：seq 比已记录的更小 → 旧消息，丢弃，防止覆盖更新的状态
+        if (P.isStaleSeq(lastSeq[data.nodeId], data.seq)) {
+            log('warn', '旧消息已丢弃 | ' + data.nodeId +
+                ' | seq=' + data.seq + ' < 已记录 ' + lastSeq[data.nodeId]);
+            addLinkLog('fault', data.nodeId,
+                '旧消息已丢弃（seq ' + data.seq + ' < ' + lastSeq[data.nodeId] + '）');
+            return;
+        }
+        if (data.seq !== null) {
+            lastSeq[data.nodeId] = data.seq;
         }
 
         var status = data.status;
-        if (VALID_STATUS.indexOf(status) === -1) {
-            status = calcStatus(temp, hum);
-            log('warn', 'status 缺失或非法，已按规则重算 | ' + data.nodeId + ' -> ' + status);
+        if (!data.statusValid) {
+            status = calcStatus(data.temperature, data.humidity);
+            log('warn', 'status 缺失或非法，已按统一规则重算 | ' + data.nodeId + ' -> ' + status);
+            addLinkLog('fault', data.nodeId, 'status 缺失或非法，已按规则重算为 ' + status);
         }
 
-        updateNode(data.nodeId, temp, hum, status, data.time);
+        updateNode(data.nodeId, data.temperature, data.humidity, status, data.time);
     }
 
     // ---------- MQTT 连接 ----------
     function connect() {
+        var missingDeps = [];
+        if (!HAS_MQTT) missingDeps.push('mqtt.js');
+        if (!HAS_CHART) missingDeps.push('chart.js');
+        if (missingDeps.length) {
+            mqttState = 'nolib';
+            setBanner('bad', '未能加载 ' + missingDeps.join('、') +
+                '（请确认 libs/ 目录完整）；卡片、事件日志、导出、TTS 仍可使用');
+            log('error', '依赖未加载：' + missingDeps.join('、') + '，已跳过 MQTT 连接');
+            renderStatusBar();
+            return;
+        }
+
         var client = mqtt.connect('ws://127.0.0.1:8083/mqtt', {
             clientId: 'dormmate-dashboard-' + Math.random().toString(16).slice(2, 8),
             connectTimeout: 4000,
@@ -1337,47 +1676,52 @@
         mqttClient = client;   // 供"开启风扇"按钮发布命令使用
 
         client.on('connect', function () {
+            mqttState = 'online';
             setBanner('ok', '已连接 Broker');
+            renderStatusBar();
             log('ok', '已连接到 ws://127.0.0.1:8083/mqtt');
             // 订阅超集 Topic，才能收到并演示"Topic 写错"的消息
             client.subscribe('dormmate/#', function (err) {
                 if (err) {
                     log('error', '订阅失败：' + err.message);
                 } else {
-                    log('info', '已订阅 dormmate/#（仅处理 dormmate/<nodeId>/env）');
+                    log('info', '已订阅 dormmate/#（env / fan / sim / focus 统一路由）');
                 }
             });
         });
 
         client.on('message', function (topic, message) {
             try {
-                // 任务 E3 新增分支：跨端联动（小程序设为重点宿舍）
-                if (topic === FOCUS_TOPIC) {
-                    handleFocusCommand(message);
-                    return;
-                }
-                handleMessage(topic, message);
+                routeMessage(topic, message);
             } catch (err) {
                 log('error', '处理消息时出错（已捕获）：' + err.message);
             }
         });
 
         client.on('reconnect', function () {
+            mqttState = 'connecting';
             setBanner('warn', '正在重连…');
+            renderStatusBar();
         });
 
         client.on('close', function () {
+            mqttState = 'offline';
             setBanner('bad', '连接已断开（自动重连中）');
             log('warn', '连接断开，等待自动重连…');
+            renderStatusBar();
         });
 
         client.on('offline', function () {
+            mqttState = 'offline';
             setBanner('bad', 'Broker 离线（自动重连中）');
+            renderStatusBar();
         });
 
         client.on('error', function (err) {
+            mqttState = 'offline';
             setBanner('bad', '连接错误（自动重连中）');
             log('error', '连接错误：' + err.message);
+            renderStatusBar();
         });
     }
 
@@ -1391,6 +1735,9 @@
     renderSituation();
     renderRank();
     renderLinkLog();
+    renderStatusBar();
+    renderHealth();
+    renderTimeline();
     exportBtn.addEventListener('click', exportEvents);
     ttsBtn.addEventListener('click', speakReminder);
     exportLinkLogBtn.addEventListener('click', exportLinkLog);
@@ -1402,6 +1749,9 @@
         renderEvents();
         renderSituation();
         renderRank();
+        renderStatusBar();
+        renderHealth();
+        renderTimeline();
         NODES.forEach(renderCard);
     }, 1000);
 

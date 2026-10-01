@@ -12,7 +12,12 @@
     在项目根目录执行  python -m http.server 8000
     浏览器访问          http://localhost:8000/e2/index.html
 -->
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<!-- 依赖本地化到 ../libs/，不依赖 CDN -->
+<script src="../libs/mqtt.min.js"></script>
+<!-- 统一消息协议与数据校验（单一来源，四端共用） -->
+<script src="../shared/protocol.js"></script>
+<!-- DormMate Design System（品牌与状态色统一口径） -->
+<link rel="stylesheet" href="../shared/design-system.css">
 <style>
     * { box-sizing: border-box; }
 
@@ -67,16 +72,66 @@
         padding: 3px 12px; border-radius: 999px;
         font-size: 13px; font-weight: bold; color: #fff; background: #94a3b8;
     }
-    .card .status[data-s="正常"] { background: #16a34a; }
-    .card .status[data-s="偏冷"] { background: #2563eb; }
-    .card .status[data-s="偏热"] { background: #dc2626; }
-    .card .status[data-s="偏湿"] { background: #ea580c; }
+    .card .status[data-status="正常"] { background: var(--dm-normal); }
+    .card .status[data-status="偏热"] { background: var(--dm-hot); }
+    .card .status[data-status="偏湿"] { background: var(--dm-wet); }
+    .card .status[data-status="偏冷"] { background: var(--dm-cold); }
+
+    /* ---------- 现场助手（DormMate Field Assistant）布局 ---------- */
+    .fa-hero-body {
+        display: flex;
+        gap: 24px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 16px;
+    }
+    .fa-hero-node { display: flex; flex-direction: column; gap: 6px; min-width: 150px; }
+    .fa-hero-label {
+        font-family: var(--dm-font-mono);
+        font-size: 11px; letter-spacing: 1.4px; color: var(--dm-accent);
+    }
+    .fa-hero-name { font-size: 26px; font-weight: 700; color: var(--dm-text-strong); }
+    .fa-hero-metrics { display: flex; gap: 32px; flex-wrap: wrap; }
+    .fa-hero-metrics .dm-metric__value { font-size: 34px; }
+
+    /* 语音状态：现场助手里最需要一眼看到的信息 */
+    .fa-asr-state {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 15px; font-weight: 700;
+        padding: 11px 14px; border-radius: 10px;
+        background: var(--dm-slate-50); border: 1px solid var(--dm-border);
+        color: var(--dm-text);
+        transition: background .2s, border-color .2s, color .2s;
+    }
+    .fa-asr-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dm-slate-400); flex: none; }
+    .fa-asr-state[data-state="listening"] { background: #fef2f2; border-color: #fecaca; color: var(--dm-hot); }
+    .fa-asr-state[data-state="listening"] .fa-asr-dot { background: var(--dm-hot); animation: fa-pulse 1s infinite; }
+    .fa-asr-state[data-state="starting"] { background: var(--dm-ice-100); border-color: var(--dm-ice-400); color: var(--dm-ice-600); }
+    .fa-asr-state[data-state="starting"] .fa-asr-dot { background: var(--dm-ice-500); animation: fa-pulse 1s infinite; }
+    .fa-asr-state[data-state="error"] { background: var(--dm-cold-soft); border-color: #fde68a; color: #b45309; }
+    .fa-asr-state[data-state="error"] .fa-asr-dot { background: var(--dm-cold); }
+    .fa-asr-state[data-state="unsupported"] .fa-asr-dot { background: var(--dm-slate-400); }
+    @keyframes fa-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .22; } }
+
+    .fa-asr-heard {
+        font-size: 13px; color: var(--dm-ice-600);
+        min-height: 20px; margin-top: 10px;
+        font-family: var(--dm-font-mono);
+    }
 
     .hint { font-size: 12px; color: #64748b; line-height: 1.8; }
     .hint code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; color: #0369a1; }
 
     #asrStatus { font-size: 13px; font-weight: bold; color: #475569; }
     #asrHeard { font-size: 13px; color: #0369a1; min-height: 20px; }
+
+    /* ASR 状态机：按钮与状态文字随状态变色，错误态要一眼看得出 */
+    #asrBtn.active { background: #dc2626; border-color: #dc2626; color: #fff; }
+    #asrBtn.error { background: #f59e0b; border-color: #f59e0b; color: #fff; }
+    #asrStatus[data-state="listening"] { color: #dc2626; }
+    #asrStatus[data-state="starting"] { color: #0369a1; }
+    #asrStatus[data-state="error"] { color: #b45309; }
+    #asrStatus[data-state="unsupported"] { color: #64748b; }
 
     #video { width: 320px; border-radius: 10px; background: #0f172a; display: block; margin-top: 12px; }
     #canvas { display: none; }
@@ -105,46 +160,64 @@
 </head>
 <body>
 
-<h1>DormMate 语音交互与现场快照</h1>
-<div class="sub">任务 E2 · ASR 语音指令 / TTS 朗读 / Camera 快照</div>
+<h1 class="dm-brand-title">DormMate
+    <span class="dm-brand-sub">Field Assistant</span>
+</h1>
+<div class="sub">现场助手 · 语音指令 / 状态朗读 / 现场快照</div>
 
 <div class="banner warn" id="banner">正在连接 Broker…</div>
 
-<!-- 节点选择 -->
+<!-- 现场态势：当前宿舍 + 实时温湿度 + 状态 -->
 <div class="panel">
-    <h2>当前选中宿舍</h2>
+    <div class="dm-panel-title">
+        <h2>当前宿舍</h2>
+        <span class="dm-panel-note" id="cardTime">数据时间 —</span>
+    </div>
     <div class="row">
         <button class="active" data-node="dorm-a">宿舍 A</button>
         <button data-node="dorm-b">宿舍 B</button>
         <button data-node="dorm-c">宿舍 C</button>
     </div>
-    <div style="margin-top:14px;">
-        <div class="card">
-            <span class="node" id="cardNode">宿舍 A</span>
-            <span class="metric">温度 <b id="cardTemp">--</b> ℃</span>
-            <span class="metric">湿度 <b id="cardHumid">--</b> %</span>
-            <span class="status" id="cardStatus" data-s="">等待数据</span>
+    <div class="fa-hero-body">
+        <div class="fa-hero-node">
+            <div class="fa-hero-label">NODE</div>
+            <div class="fa-hero-name" id="cardNode">宿舍 A</div>
+            <span class="dm-status" id="cardStatus" data-status="">等待数据</span>
+        </div>
+        <div class="fa-hero-metrics">
+            <div class="dm-metric">
+                <span class="dm-metric__label">TEMP · 温度</span>
+                <span class="dm-metric__value"><span id="cardTemp">--</span><span class="dm-metric__unit">℃</span></span>
+            </div>
+            <div class="dm-metric">
+                <span class="dm-metric__label">HUMID · 湿度</span>
+                <span class="dm-metric__value"><span id="cardHumid">--</span><span class="dm-metric__unit">%</span></span>
+            </div>
         </div>
     </div>
 </div>
 
 <!-- 语音交互 -->
 <div class="panel">
-    <h2>语音交互</h2>
-    <div class="row">
+    <div class="dm-panel-title">
+        <h2>语音助手</h2>
+        <span class="dm-panel-note">语音与按钮调用同一套业务函数，行为完全一致</span>
+    </div>
+    <div class="fa-asr-state" id="asrStateBox" data-state="idle">
+        <span class="fa-asr-dot"></span>
+        <span id="asrStatus">语音待机</span>
+    </div>
+    <div class="fa-asr-heard" id="asrHeard">最近识别：—</div>
+    <div class="row" style="margin-top:14px;">
         <button id="asrBtn">🎤 开始语音指令</button>
         <button id="speakBtn">🔊 朗读状态</button>
         <button id="cameraBtn">📷 开启摄像头</button>
         <button id="snapBtn" disabled>📸 拍照并保存快照</button>
     </div>
-    <div class="row" style="margin-top:12px;">
-        <span id="asrStatus">语音待机</span>
-    </div>
-    <div id="asrHeard">最近识别：—</div>
     <div class="hint" style="margin-top:12px;">
         可用语音指令：<code>切换到宿舍A</code> <code>切换到宿舍B</code> <code>切换到宿舍C</code>
         <code>朗读状态</code> <code>拍照</code><br>
-        语音识别依赖浏览器在线识别服务，若不可用可直接点上方按钮完成同样操作（两者走同一套处理逻辑）。
+        识别置信度偏低时会先弹确认框再执行；语音识别不可用时，上方按钮可完成全部同样的操作。
     </div>
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
@@ -172,13 +245,16 @@
     /* ============================================================
        常量
        ============================================================ */
-    var NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+    var P = window.DormMateProtocol;
+    var NODES = P.NODES;
     var NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
-    var TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
-    var VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
     var BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
     var SNAP_KEY = 'dormmate_e2_snapshots';
     var MAX_LOG = 60;
+
+    // 每个节点最近一次收到的 seq：旧消息直接丢弃
+    var lastSeq = {};
+    NODES.forEach(function (id) { lastSeq[id] = null; });
 
     /* ============================================================
        状态
@@ -190,7 +266,6 @@
     var client = null;
     var stream = null;
     var recognition = null;
-    var recognizing = false;
     var snapshots = loadSnapshots();
 
     /* ============================================================
@@ -240,8 +315,10 @@
     var cardTempEl = document.getElementById('cardTemp');
     var cardHumidEl = document.getElementById('cardHumid');
     var cardStatusEl = document.getElementById('cardStatus');
+    var cardTimeEl = document.getElementById('cardTime');
     var asrBtn = document.getElementById('asrBtn');
     var asrStatusEl = document.getElementById('asrStatus');
+    var asrStateBoxEl = document.getElementById('asrStateBox');
     var asrHeardEl = document.getElementById('asrHeard');
     var speakBtn = document.getElementById('speakBtn');
     var cameraBtn = document.getElementById('cameraBtn');
@@ -258,6 +335,13 @@
        ============================================================ */
     function connect() {
         if (client) return;
+        // mqtt.js 来自 CDN，加载失败时只跳过实时数据，
+        // 语音、拍照、按钮这些不依赖 MQTT 的功能必须照常可用
+        if (typeof mqtt === 'undefined') {
+            setBanner('bad', '未能加载 mqtt.js（请确认 libs/ 目录完整）；语音与拍照仍可使用');
+            log('error', 'mqtt.js 未加载，已跳过 MQTT 连接');
+            return;
+        }
         setBanner('warn', '正在连接 Broker…');
 
         client = mqtt.connect(BROKER_WS, {
@@ -273,13 +357,13 @@
             log('ok', '已连接 ' + BROKER_WS);
             client.subscribe('dormmate/#', function (err) {
                 if (err) log('error', '订阅失败：' + err.message);
-                else log('info', '已订阅 dormmate/#（仅处理 dormmate/<nodeId>/env）');
+                else log('info', '已订阅 dormmate/#（env / fan / sim / focus 统一路由）');
             });
         });
 
         client.on('message', function (topic, message) {
             try {
-                handleMessage(topic, message);
+                routeMessage(topic, message);
             } catch (err) {
                 log('error', '处理消息出错（已捕获）：' + err.message);
             }
@@ -293,64 +377,56 @@
         });
     }
 
-    function handleMessage(topic, message) {
+    /* P1：统一消息路由 —— 校验规则全部来自 shared/protocol.js */
+    function routeMessage(topic, message) {
         var raw = message.toString();
-        var data;
-        try {
-            data = JSON.parse(raw);
-        } catch (err) {
-            log('error', '非法 JSON，已忽略 | ' + topic);
+        var cls = P.classifyTopic(topic);
+
+        if (cls.kind === P.KIND.UNKNOWN) {
+            log('error', '未知 Topic，已忽略 | ' + topic + '（' + cls.reason + '）');
+            return;
+        }
+        if (cls.kind !== P.KIND.ENV) {
+            // fan / sim / focus 都是合法协议消息，本页不消费，也不记为故障
+            log('info', '控制消息（' + cls.kind + '）已按协议接受 | ' + topic);
             return;
         }
 
-        var matched = topic.match(TOPIC_RE);
-        if (!matched) {
-            log('error', 'Topic 格式不正确，已忽略 | ' + topic);
+        var result = P.validateEnvMessage(topic, raw);
+        if (!result.ok) {
+            log('error', result.message + ' | ' + topic);
             return;
         }
-        var topicNode = matched[1];
-        if (NODES.indexOf(topicNode) === -1) {
-            log('error', '未知节点，已忽略 | ' + topic);
-            return;
-        }
-        if (!data || NODES.indexOf(data.nodeId) === -1) {
-            log('error', 'nodeId 非法，已忽略 | ' + topic);
-            return;
-        }
-        if (data.nodeId !== topicNode) {
-            log('error', 'Topic 与 nodeId 不一致，已忽略 | ' + topic);
-            return;
-        }
+        var data = result.data;
 
-        var temp = Number(data.temperature);
-        var hum = Number(data.humidity);
-        if (!isFinite(temp) || !isFinite(hum)) {
-            log('error', '温湿度不是有效数值，已忽略 | ' + raw.slice(0, 40));
+        if (P.isStaleSeq(lastSeq[data.nodeId], data.seq)) {
+            log('warn', '旧消息已丢弃 | ' + data.nodeId +
+                ' | seq=' + data.seq + ' < 已记录 ' + lastSeq[data.nodeId]);
             return;
+        }
+        if (data.seq !== null) {
+            lastSeq[data.nodeId] = data.seq;
         }
 
         var status = data.status;
-        if (VALID_STATUS.indexOf(status) === -1) {
-            status = calcStatus(temp, hum);
+        if (!data.statusValid) {
+            status = calcStatus(data.temperature, data.humidity);
         }
 
         liveData[data.nodeId] = {
-            temperature: temp, humidity: hum, status: status,
+            temperature: data.temperature,
+            humidity: data.humidity,
+            status: status,
             time: data.time || formatStamp(new Date())
         };
 
         if (data.nodeId === currentNode) renderCard();
     }
 
-    /** 固定阈值规则：与项目其余实现保持一致（本任务不改动规则）。
-     *  任务 E3：status 由后端 Publisher 计算，前端正常路径直接使用后端值；
-     *  此处仅在字段缺失/非法时兜底。 */
-    function calcStatus(temperature, humidity) {
-        if (temperature < 18) return '偏冷';
-        if (temperature >= 30) return '偏热';
-        if (humidity >= 75) return '偏湿';
-        return '正常';
-    }
+    // 固定阈值规则统一来自 shared/protocol.js（本任务不改动规则）。
+    // 任务 E3：status 由后端 Publisher 计算，前端正常路径直接使用后端值；
+    // 此处仅在字段缺失/非法时兜底。
+    var calcStatus = P.calcStatus;
 
     /* ============================================================
        渲染
@@ -361,7 +437,8 @@
         cardTempEl.textContent = d ? d.temperature.toFixed(1) : '--';
         cardHumidEl.textContent = d ? d.humidity.toFixed(1) : '--';
         cardStatusEl.textContent = d ? d.status : '等待数据';
-        cardStatusEl.setAttribute('data-s', d ? d.status : '');
+        cardStatusEl.setAttribute('data-status', d ? d.status : '');
+        if (cardTimeEl) cardTimeEl.textContent = '数据时间 ' + (d ? d.time : '—');
     }
 
     function selectNode(nodeId) {
@@ -507,8 +584,70 @@
     /* ============================================================
        ASR：语音指令（三条业务指令）
        ============================================================ */
-    function setAsrStatus(text) { asrStatusEl.textContent = text; }
     function setHeard(text) { asrHeardEl.textContent = '最近识别：' + text; }
+
+    /* ---------- ASR 状态机 ----------
+       idle → starting → listening →（result 或 error）→ idle
+
+       修掉的老问题：
+         - start() 可以在已经启动时被再次调用，抛 InvalidStateError
+         - onerror 设置的提示会被紧接着触发的 onend 立刻覆盖成"语音待机"，
+           错误提示一闪而过，用户根本看不到
+         - 不看 confidence，听错也照执行
+         - 失败后状态卡住，无法重试
+    */
+    var ASR = {
+        IDLE: 'idle', STARTING: 'starting', LISTENING: 'listening',
+        ERROR: 'error', UNSUPPORTED: 'unsupported'
+    };
+    var ASR_LABEL = {
+        idle: '语音待机',
+        starting: '正在启动麦克风…',
+        listening: '正在聆听…',
+        error: '识别失败',
+        unsupported: '不支持语音识别'
+    };
+    var ASR_BUTTON = {
+        idle: '🎤 开始语音指令',
+        starting: '🎤 启动中…',
+        listening: '⏹ 停止语音指令',
+        error: '🎤 重试语音指令',
+        unsupported: '🎤 不支持语音识别'
+    };
+    // 低于该置信度时先征求确认，避免听错就直接执行
+    var ASR_CONFIDENCE_MIN = 0.6;
+
+    var asrState = ASR.IDLE;
+
+    function setAsrState(state, hint) {
+        asrState = state;
+        asrBtn.textContent = ASR_BUTTON[state];
+        asrBtn.classList.toggle('active', state === ASR.LISTENING);
+        asrBtn.classList.toggle('error', state === ASR.ERROR);
+        asrStatusEl.textContent = hint || ASR_LABEL[state];
+        asrStatusEl.setAttribute('data-state', state);
+        // 状态点与状态文字同一个来源，避免两处说法不一致
+        if (asrStateBoxEl) asrStateBoxEl.setAttribute('data-state', state);
+    }
+
+    /** 把 SpeechRecognition 的错误码翻译成人能看懂的话 */
+    function asrErrorText(code) {
+        switch (code) {
+            case 'not-allowed':
+            case 'service-not-allowed':
+                return '无麦克风权限，请在浏览器允许后重试';
+            case 'no-speech':
+                return '未听清，请再说一次';
+            case 'audio-capture':
+                return '找不到麦克风设备';
+            case 'network':
+                return '识别服务网络异常，请重试';
+            case 'aborted':
+                return '识别已取消';
+            default:
+                return '识别失败（' + code + '）';
+        }
+    }
 
     function initRecognition() {
         var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -518,48 +657,95 @@
         r.lang = 'zh-CN';
         r.continuous = false;
         r.interimResults = false;
+        r.maxAlternatives = 1;
 
         r.onstart = function () {
-            recognizing = true;
-            asrBtn.textContent = '⏹ 停止语音指令';
-            asrBtn.classList.add('active');
-            setAsrStatus('正在聆听…');
+            setAsrState(ASR.LISTENING);
         };
+
         r.onresult = function (e) {
-            var text = e.results[0][0].transcript;
-            setHeard(text);
+            if (!e.results || !e.results[0] || !e.results[0][0]) {
+                setAsrState(ASR.ERROR, '未听清，请再说一次');
+                return;
+            }
+            var alt = e.results[0][0];
+            var text = alt.transcript;
+            // confidence 在部分浏览器上恒为 0，这种"拿不到"不等于"置信度低"
+            var confidence = (typeof alt.confidence === 'number' && alt.confidence > 0)
+                ? alt.confidence : null;
+
+            setHeard(text + (confidence === null
+                ? '' : '（置信度 ' + (confidence * 100).toFixed(0) + '%）'));
+
+            if (confidence !== null && confidence < ASR_CONFIDENCE_MIN) {
+                setAsrState(ASR.LISTENING, '没听太清（置信度 ' +
+                    (confidence * 100).toFixed(0) + '%），请确认');
+                log('warn', '识别置信度偏低：' + (confidence * 100).toFixed(0) + '%，等待确认');
+                if (!window.confirm('没太听清，听到的是「' + text + '」，确定要执行吗？')) {
+                    log('info', '用户取消了低置信度指令：' + text);
+                    return;
+                }
+            }
+
+            // 语音与按钮走的是同一个业务函数
             handleCommand(text);
         };
+
         r.onerror = function (e) {
-            setAsrStatus('识别出错：' + e.error);
-            log('error', 'ASR 错误：' + e.error);
+            // 关键：这里设的提示不能被紧随其后的 onend 冲掉（由 onend 判断状态后保留）
+            setAsrState(ASR.ERROR, asrErrorText(e.error));
+            log('error', 'ASR 错误：' + e.error + ' — ' + asrErrorText(e.error));
         };
+
         r.onend = function () {
-            recognizing = false;
-            asrBtn.textContent = '🎤 开始语音指令';
-            asrBtn.classList.remove('active');
-            setAsrStatus('语音待机');
+            if (asrState === ASR.ERROR) {
+                // 出错就停在错误态（按钮显示"重试"），保留失败原因给用户看
+                asrBtn.textContent = ASR_BUTTON.error;
+                return;
+            }
+            setAsrState(ASR.IDLE);
         };
+
         return r;
     }
 
-    function toggleAsr() {
+    function startAsr() {
         if (!recognition) recognition = initRecognition();
         if (!recognition) {
+            setAsrState(ASR.UNSUPPORTED, '当前浏览器不支持语音识别，请使用下方按钮');
             log('warn', '当前浏览器不支持语音识别，请使用下方按钮');
-            setAsrStatus('不支持语音识别');
             return;
         }
-        if (recognizing) {
-            recognition.stop();
-            return;
-        }
+        // 只有确实没在跑的时候才 start，杜绝重复调用
+        if (asrState === ASR.STARTING || asrState === ASR.LISTENING) return;
+
+        setAsrState(ASR.STARTING);
         try {
             recognition.start();
-            log('info', '已启动语音识别，请说出指令');
+            log('info', '已启动语音识别（可说：切换到宿舍A / 朗读状态 / 拍照）');
         } catch (err) {
+            setAsrState(ASR.ERROR, '启动失败，请稍后重试');
             log('error', '启动语音识别失败：' + err.message);
         }
+    }
+
+    function stopAsr() {
+        if (!recognition) return;
+        try {
+            recognition.stop();
+        } catch (err) {
+            /* 会话已经结束，忽略 */
+        }
+    }
+
+    function toggleAsr() {
+        if (asrState === ASR.UNSUPPORTED) return;
+        if (asrState === ASR.STARTING || asrState === ASR.LISTENING) {
+            stopAsr();
+            return;
+        }
+        // idle / error 都走同一条启动路径，所以失败后直接再点一次即是重试
+        startAsr();
     }
 
     /** 语音 / 按钮共用的指令分发入口 */
@@ -639,7 +825,11 @@
         },
         hasRecognitionSupport: function () {
             return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-        }
+        },
+        // ASR 状态机的只读探针，供自动化验证断言状态流转
+        getAsrState: function () { return asrState; },
+        getAsrStatusText: function () { return asrStatusEl.textContent; },
+        getAsrButtonText: function () { return asrBtn.textContent; }
     };
 
     /* ============================================================
@@ -647,7 +837,9 @@
        ============================================================ */
     selectNode('dorm-a');
     renderSnapshots();
-    setAsrStatus(window.__e2.hasRecognitionSupport() ? '语音待机' : '不支持语音识别');
+    // 初始化 ASR 状态机：不支持语音识别的浏览器直接进入不支持态，
+    // 但页面上的按钮仍可完成全部业务操作
+    setAsrState(window.__e2.hasRecognitionSupport() ? ASR.IDLE : ASR.UNSUPPORTED);
     log('info', 'E2 页面已加载（ASR / TTS / Camera）');
     connect();
 })();

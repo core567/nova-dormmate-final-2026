@@ -1,15 +1,59 @@
 <view class="page">
 
+  <!-- 品牌 -->
+  <view class="brand">
+    <text class="brand-title">DormMate</text>
+    <text class="brand-sub">移动控制中心</text>
+  </view>
+
   <!-- 连接状态 -->
   <view class="conn {{connected ? 'conn-ok' : 'conn-bad'}}">{{connText}}</view>
 
-  <!-- 当前优先关注 -->
-  <view class="priority">
-    <view class="p-node">{{priorityText}}</view>
-    <view class="p-reason">{{priorityReason}}</view>
+  <!-- 当前重点宿舍 / 优先关注 -->
+  <view class="hero {{hero.hasAnomaly ? 'hero-alert' : ''}}">
+    <view class="hero-head">
+      <text class="hero-label">{{hero.isFocus ? '★ 当前重点宿舍' : '当前优先关注'}}</text>
+      <text class="hero-node-id">{{hero.id}}</text>
+    </view>
+    <view class="hero-name">{{hero.label}}</view>
+
+    <view class="hero-tags">
+      <text class="tag {{hero.statusClass}}">{{hero.status}}</text>
+      <text class="tag {{hero.phaseClass}}">{{hero.phaseLabel}}</text>
+      <text class="tag tag-offline" wx:if="{{hero.offline}}">节点离线</text>
+    </view>
+
+    <view class="hero-metrics">
+      <view class="hero-metric">
+        <text class="hm-k">温度</text>
+        <text class="hm-v">{{hero.temperature}}</text>
+        <text class="hm-u">℃</text>
+      </view>
+      <view class="hero-metric">
+        <text class="hm-k">湿度</text>
+        <text class="hm-v">{{hero.humidity}}</text>
+        <text class="hm-u">%</text>
+      </view>
+      <view class="hero-metric">
+        <text class="hm-k">异常持续</text>
+        <text class="hm-v hm-duration">{{hero.duration}}</text>
+      </view>
+    </view>
+
+    <view class="hero-reason">{{hero.reason}}</view>
+
+    <view class="hero-actions">
+      <button class="fan-btn" size="mini" disabled="{{!hero.canFan}}"
+              bindtap="onFan" data-node="{{hero.id}}">开启风扇</button>
+      <button class="focus-btn {{hero.isFocus ? 'focused' : ''}}" size="mini"
+              data-node="{{hero.id}}" bindtap="onSetFocus">
+        {{hero.isFocus ? '★ 已设为重点' : '设为重点'}}
+      </button>
+    </view>
   </view>
 
   <!-- 三个宿舍（数据按 nodeId 隔离） -->
+  <view class="section-title">三个宿舍</view>
   <view class="cards">
     <view class="card" wx:for="{{nodes}}" wx:key="id">
       <view class="card-head">
@@ -51,7 +95,7 @@
 
   <!-- 本地历史记录（事件闭环归档） -->
   <view class="recent" wx:if="{{recentEvents.length}}">
-    <view class="section-title">最近恢复事件（本地历史记录）</view>
+    <view class="section-title">最近事件（本地历史记录）</view>
     <view class="recent-item" wx:for="{{recentEvents}}" wx:key="event_id">
       <text class="r-id">{{item.event_id}}</text>
       <text class="r-info">{{item.nodeId}} · {{item.type}} · {{item.status}}</text>

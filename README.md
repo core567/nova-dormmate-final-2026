@@ -5,6 +5,10 @@
 2. 离线分析：在 `analysis` 目录下运行 `python analyze.py`，读取 `dormmate.csv` 并生成报告。
 3. 实时 Dashboard：双击打开 `dashboard/index.html`（需先运行 `python server/publisher.py`）。
 4. 3D 数字空间：**双击**打开 `3d/index.html`，不要用 Live Server（原因见 M6 章节）。
+5. 现场助手（E2）：`python -m http.server 8000` 后访问 `http://localhost:8000/e2/index.html`。
+
+> **比赛演示**：完整的分段演示流程（含时间轴、话术、容错演练与应急方案）见
+> [docs/demo-script.md](docs/demo-script.md)。
 
 ## 主要功能
 - M1: 温湿度输入、状态判断、历史记录
@@ -698,8 +702,30 @@ server/publisher.py  →  Mosquitto ( dormmate/<nodeId>/env )  →  ┬─ Web D
 > Web 与 3D 自己切换选中节点时不会反向广播，避免形成循环消息。
 
 ## 已知限制
-- 语音识别（ASR）在部分浏览器兼容性较差，目前主要依赖 TTS 朗读功能。
+- 语音识别（ASR）依赖浏览器的在线识别服务，需联网；识别不可用时页面会给出明确状态提示，
+  且全部功能都可用按钮完成（语音与按钮调用同一套业务函数）。
 - 历史记录暂未做数据库持久化，刷新页面会清空。
 - M5 的趋势图数据保存在浏览器内存中，刷新后重新累积（最多保留最近 60 个采样点）。
-- M6 的 3D 页面依赖 unpkg CDN 加载 three.js 与 mqtt.js，首次打开需联网；
-  若 CDN 不可用，页面会显示明确的失败提示而非黑屏。
+- E2 的摄像头与麦克风需要安全上下文，必须用 localhost 打开（见任务 E2 章节）。
+
+## 离线可用性
+
+前端依赖已全部本地化到 `libs/`，四端**不再依赖任何 CDN**，断网也能正常启动：
+
+| 文件 | 版本 | 使用方 |
+| --- | --- | --- |
+| `libs/three.min.js` | 0.128.0 | 3D 数字空间 |
+| `libs/OrbitControls.js` | 0.128.0 | 3D 数字空间 |
+| `libs/mqtt.min.js` | 5.3.5 | Dashboard / 3D / E2 |
+| `libs/chart.umd.js` | 4.4.1 | Dashboard 趋势图 |
+
+验证方式：把 `libs/` 三个 JS 之外的所有外部请求阻断后打开四个页面，
+实测四端均正常加载、正常收到 MQTT 数据，且**未发起任何非本地请求**。
+
+同时四端共用两个单一来源文件：
+
+- `shared/protocol.js` —— 统一消息协议与数据校验（状态规则全项目唯一实现）
+- `shared/design-system.css` —— 统一设计 token 与状态色口径
+
+`miniapp/utils/protocol.js` 是 `shared/protocol.js` 的逐字节副本（小程序只能用相对 `require`，
+不能引用 `miniprogramRoot` 之外的路径），验收脚本会做字节比对，防止两份漂移。

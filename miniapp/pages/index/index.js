@@ -8,11 +8,11 @@
  * - 页面底部折叠区保留 M4 的手动环境分析功能
  */
 const mqtt = require('../../utils/mqtt.js');
+// 统一消息协议与数据校验（与 shared/protocol.js 逐字节相同的副本）
+const P = require('../../utils/protocol.js');
 
-const NODES = ['dorm-a', 'dorm-b', 'dorm-c'];
+const NODES = P.NODES;
 const NODE_LABEL = { 'dorm-a': '宿舍 A', 'dorm-b': '宿舍 B', 'dorm-c': '宿舍 C' };
-const TOPIC_RE = /^dormmate\/([^/]+)\/env$/;
-const VALID_STATUS = ['正常', '偏冷', '偏热', '偏湿'];
 const BROKER_WS = 'ws://127.0.0.1:8083/mqtt';
 
 const PHASE_LABEL = { normal: '正常', open: '待处理', handling: '处理中', recovered: '已恢复' };
@@ -25,15 +25,10 @@ const STATUS_CLASS = {
 };
 const OFFLINE_MS = 10000;   // 任务 D4：超过该时长未收到数据即判定节点离线
 
-/** 固定阈值规则：与 web / dashboard / 3d / publisher / analyze 保持一致。
+/** 固定阈值规则统一来自 utils/protocol.js（全项目唯一实现）。
  *  任务 E3：status 由后端 Publisher 统一计算，小程序正常路径直接使用后端值；
  *  此处仅在字段缺失/非法时兜底（保留 D 模块的容错验收）。 */
-function calcStatus(temperature, humidity) {
-  if (temperature < 18) return '偏冷';
-  if (temperature >= 30) return '偏热';
-  if (humidity >= 75) return '偏湿';
-  return '正常';
-}
+const calcStatus = P.calcStatus;
 
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 
@@ -59,6 +54,12 @@ Page({
     connText: '正在连接…',
     priorityText: '当前无异常宿舍',
     priorityReason: '三个宿舍环境均正常',
+    hero: {
+      id: '—', label: '等待数据', temperature: '--', humidity: '--',
+      status: '等待数据', statusClass: '', phaseLabel: '正常', phaseClass: 'ph-normal',
+      duration: '—', offline: false, isFocus: false, canFan: false,
+      hasAnomaly: false, reason: '正在连接并等待数据…'
+    },
     nodes: [],
     recentEvents: [],
     focusNode: '',          // 任务 E3：被设为重点的宿舍，会广播给 Web / 3D
@@ -77,6 +78,7 @@ Page({
     NODES.forEach((id) => {
       this._state[id] = {
         temperature: null, humidity: null, status: '', lastUpdate: null,
+        lastSeq: null,          // 最近一次收到的 seq，用于丢弃旧消息
         phase: 'normal', episode: null, anomalyCount: 0, verifyData: []
       };
     });
@@ -142,49 +144,43 @@ Page({
     this.setData({ connected: false, connText: '已断开连接' });
   },
 
-  /** 消息校验：非法数据只提示、不改状态，与 Dashboard 的处理方式一致 */
+  /** P1：统一消息路由 —— 校验规则全部来自 utils/protocol.js。
+   *  合法的 fan / sim / focus 不再被当成"非法 env Topic"。 */
   _onMessage(topic, payload) {
-    let data;
-    try {
-      data = JSON.parse(payload);
-    } catch (err) {
-      console.warn('非法 JSON，已忽略', topic);
+    const cls = P.classifyTopic(topic);
+
+    if (cls.kind === P.KIND.UNKNOWN) {
+      console.warn('未知 Topic，已忽略', topic, cls.reason);
+      return;
+    }
+    if (cls.kind !== P.KIND.ENV) {
+      // 控制消息本页不消费（fan 由自己发出、focus 由自己发出、sim 由 Publisher 消费）
+      console.info('控制消息（' + cls.kind + '）已按协议接受', topic);
       return;
     }
 
-    const matched = topic.match(TOPIC_RE);
-    if (!matched) {
-      console.warn('Topic 格式不正确，已忽略', topic);
+    const result = P.validateEnvMessage(topic, payload);
+    if (!result.ok) {
+      console.warn(result.message, topic);
       return;
     }
+    const data = result.data;
+    const s = this._state[data.nodeId];
 
-    const topicNode = matched[1];
-    if (NODES.indexOf(topicNode) === -1) {
-      console.warn('未知节点，已忽略', topic);
+    // P1：seq 更小说明是旧消息，直接丢弃，防止覆盖更新的状态
+    if (P.isStaleSeq(s.lastSeq, data.seq)) {
+      console.warn('旧消息已丢弃', data.nodeId, data.seq, '<', s.lastSeq);
       return;
     }
-    if (!data || NODES.indexOf(data.nodeId) === -1) {
-      console.warn('nodeId 非法，已忽略', topic);
-      return;
-    }
-    if (data.nodeId !== topicNode) {
-      console.warn('Topic 与 nodeId 不一致，已忽略', topic);
-      return;
-    }
-
-    const temp = Number(data.temperature);
-    const hum = Number(data.humidity);
-    if (!isFinite(temp) || !isFinite(hum)) {
-      console.warn('温湿度不是有效数值，已忽略', payload);
-      return;
-    }
+    if (data.seq !== null) s.lastSeq = data.seq;
 
     let status = data.status;
-    if (VALID_STATUS.indexOf(status) === -1) {
-      status = calcStatus(temp, hum);
+    if (!data.statusValid) {
+      status = calcStatus(data.temperature, data.humidity);
+      console.warn('status 缺失或非法，已按统一规则重算', data.nodeId, status);
     }
 
-    this._onEnv(data.nodeId, temp, hum, status, data.time);
+    this._onEnv(data.nodeId, data.temperature, data.humidity, status, data.time);
     this._refresh();
   },
 
@@ -203,8 +199,11 @@ Page({
       if (s.episode) {
         this._archive(nodeId, s, stamp);
         s.episode = null;
+        s.phase = 'recovered';      // HANDLING/OPEN → 后续数据正常 → RECOVERED
+      } else if (s.anomalyCount === 0) {
+        s.phase = 'normal';         // 从未发生过异常，保持「正常」
       }
-      s.phase = 'recovered';
+      // 已经恢复过则停留在「已恢复」，等下一次异常才转 OPEN
       s.verifyData = [];
       return;
     }
@@ -229,12 +228,26 @@ Page({
     }
   },
 
+  /** P0-六：事件序号从本地已存事件里恢复，刷新页面后不从头编号 */
+  _nextEventSeq(nodeId) {
+    const events = wx.getStorageSync('dorm_events') || [];
+    let max = 0;
+    events.forEach((r) => {
+      const m = /^evt-(.+)-(\d+)$/.exec(String(r.event_id || ''));
+      if (m && m[1] === nodeId) {
+        const n = parseInt(m[2], 10);
+        if (n > max) max = n;
+      }
+    });
+    return max + 1;
+  },
+
   /** 事件归档到本地历史记录 */
   _archive(nodeId, s, recoverTime) {
     const ep = s.episode;
     const events = wx.getStorageSync('dorm_events') || [];
     events.push({
-      event_id: 'evt-' + nodeId + '-' + (events.length + 1),
+      event_id: 'evt-' + nodeId + '-' + pad(this._nextEventSeq(nodeId)),
       nodeId: nodeId,
       startTime: ep.startTime,
       type: ep.type,
@@ -314,6 +327,8 @@ Page({
         statusClass: STATUS_CLASS[s.status] || '',
         phaseLabel: PHASE_LABEL[s.phase],
         phaseClass: PHASE_CLASS[s.phase],
+        // 第四轮：异常持续时间单独成字段，供 hero 大字号展示
+        duration: s.episode ? fmtDuration(Date.now() - s.episode.startTs) : '—',
         episodeText: episodeText,
         offline: offline,
         isFocus: this.data.focusNode === id,   // 任务 E3：重点宿舍标记
@@ -324,8 +339,57 @@ Page({
     this.setData({
       nodes: nodes,
       priorityText: priorityText,
-      priorityReason: priorityReason
+      priorityReason: priorityReason,
+      hero: this._buildHero(nodes, ranked, priorityReason)
     });
+  },
+
+  /**
+   * 当前重点宿舍卡片：优先展示手动设为重点的宿舍；
+   * 没设重点时退回到优先关注的异常宿舍；都没有则展示第一个宿舍。
+   */
+  _buildHero(nodes, ranked, priorityReason) {
+    const focusId = this.data.focusNode;
+    let id = null;
+    if (focusId && NODES.indexOf(focusId) !== -1) {
+      id = focusId;
+    } else if (ranked.length) {
+      id = ranked[0].id;
+    } else {
+      id = NODES[0];
+    }
+
+    const n = nodes.filter((item) => item.id === id)[0] || nodes[0];
+    const s = this._state[id];
+    const isFocus = focusId === id;
+
+    let reason;
+    if (!n) {
+      reason = '等待数据';
+    } else if (s.episode) {
+      reason = '异常中：' + s.episode.type + '，处置动作需在卡片内完成';
+    } else if (isFocus) {
+      reason = '已设为重点，切换时会同步广播给 Web Dashboard 与 3D 页面';
+    } else {
+      reason = priorityReason;
+    }
+
+    return {
+      id: n ? n.id : '—',
+      label: n ? n.label : '暂无数据',
+      temperature: n ? n.temperature : '--',
+      humidity: n ? n.humidity : '--',
+      status: n ? n.status : '等待数据',
+      statusClass: n ? n.statusClass : '',
+      phaseLabel: n ? n.phaseLabel : '正常',
+      phaseClass: n ? n.phaseClass : 'ph-normal',
+      duration: n ? n.duration : '—',
+      offline: n ? n.offline : false,
+      isFocus: isFocus,
+      canFan: n ? n.canFan : false,
+      hasAnomaly: !!(s && (s.episode || n.offline)),
+      reason: reason
+    };
   },
 
   /* ---------------- 交互 ---------------- */
@@ -343,16 +407,30 @@ Page({
       return;
     }
 
+    // P0-五：未连接 / publish 返回 false 都不能进入 HANDLING，
+    // 必须先确认命令真的发出去了，才把状态推到「处理中」。
+    if (!this._client || !this._client.isConnected()) {
+      wx.showToast({ title: 'MQTT 未连接，命令未发送', icon: 'none' });
+      return;
+    }
+
+    const sent = this._client.publish('dormmate/' + nodeId + '/fan',
+      JSON.stringify({
+        schemaVersion: P.SCHEMA_VERSION,
+        nodeId: nodeId,
+        command: 'on',
+        time: nowStamp(),
+        seq: P.nextSeq()
+      }));
+
+    if (!sent) {
+      wx.showToast({ title: '命令发送失败，状态保持待处理', icon: 'none' });
+      return;
+    }
+
     s.phase = 'handling';
     s.episode.fanActionTime = nowTime();
     s.verifyData = [];
-
-    if (this._client && this._client.isConnected()) {
-      this._client.publish('dormmate/' + nodeId + '/fan',
-        JSON.stringify({ nodeId: nodeId, command: 'on', time: nowStamp() }));
-    } else {
-      wx.showToast({ title: 'MQTT 未连接，命令未发送', icon: 'none' });
-    }
 
     wx.showToast({ title: '处理中，风扇已开启', icon: 'none' });
     this._refresh();
@@ -366,18 +444,27 @@ Page({
     const nodeId = e.currentTarget.dataset.node;
     if (NODES.indexOf(nodeId) === -1) return;
 
-    this.setData({ focusNode: nodeId });
-
-    if (this._client && this._client.isConnected()) {
-      this._client.publish('dormmate/focus', JSON.stringify({
-        nodeId: nodeId,
-        source: 'miniapp',
-        time: nowStamp()
-      }));
-      wx.showToast({ title: NODE_LABEL[nodeId] + ' 已设为重点', icon: 'none' });
-    } else {
+    // P0-五：只有广播真正发出去，才更新本地重点标记并提示成功
+    if (!this._client || !this._client.isConnected()) {
       wx.showToast({ title: 'MQTT 未连接，未能广播', icon: 'none' });
+      return;
     }
+
+    const sent = this._client.publish('dormmate/focus', JSON.stringify({
+      schemaVersion: P.SCHEMA_VERSION,
+      nodeId: nodeId,
+      source: 'miniapp',
+      time: nowStamp(),
+      seq: P.nextSeq()
+    }));
+
+    if (!sent) {
+      wx.showToast({ title: '广播失败，重点未切换', icon: 'none' });
+      return;
+    }
+
+    this.setData({ focusNode: nodeId });
+    wx.showToast({ title: NODE_LABEL[nodeId] + ' 已设为重点', icon: 'none' });
 
     this._refresh();
   },
