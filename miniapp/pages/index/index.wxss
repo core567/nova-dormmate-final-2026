@@ -1,62 +1,187 @@
-/**index.wxss**/
+/**index.wxss —— 任务 D 实时看板样式**/
 page {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-.scrollarea {
-  flex: 1;
-  overflow-y: hidden;
+  background: #f1f5f9;
 }
 
-.userinfo {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  color: #aaa;
-  width: 80%;
+.page {
+  padding: 20rpx 24rpx 60rpx;
 }
 
-.userinfo-avatar {
+/* ---- 连接状态 ---- */
+.conn {
+  padding: 12rpx 24rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 20rpx;
+}
+.conn-ok { color: #15803d; background: #dcfce7; }
+.conn-bad { color: #b91c1c; background: #fee2e2; }
+
+/* ---- 当前优先关注 ---- */
+.priority {
+  background: #ffffff;
+  border: 1rpx solid #e2e8f0;
+  border-left: 10rpx solid #f59e0b;
+  border-radius: 16rpx;
+  padding: 24rpx 28rpx;
+  margin-bottom: 24rpx;
+}
+.p-node {
+  font-size: 34rpx;
+  font-weight: bold;
+  color: #1e293b;
+}
+.p-reason {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+/* ---- 宿舍卡片 ---- */
+.card {
+  background: #ffffff;
+  border: 1rpx solid #e2e8f0;
+  border-radius: 16rpx;
+  padding: 24rpx 28rpx;
+  margin-bottom: 20rpx;
+}
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 16rpx;
+}
+.name { font-size: 30rpx; font-weight: bold; color: #1e293b; }
+.node-id { font-size: 22rpx; color: #94a3b8; }
+
+.metrics {
+  display: flex;
+  gap: 40rpx;
+  margin-bottom: 14rpx;
+}
+.metric { display: flex; align-items: baseline; }
+.metric .k { font-size: 24rpx; color: #94a3b8; margin-right: 8rpx; }
+.metric .v { font-size: 38rpx; font-weight: bold; color: #1e293b; }
+.metric .u { font-size: 22rpx; color: #94a3b8; margin-left: 4rpx; }
+
+.tags { display: flex; gap: 12rpx; }
+.tag {
+  padding: 4rpx 18rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  font-weight: bold;
+  color: #ffffff;
+  background: #94a3b8;
+}
+.st-normal { background: #16a34a; }
+.st-cold   { background: #2563eb; }
+.st-hot    { background: #dc2626; }
+.st-wet    { background: #ea580c; }
+
+.ph-normal    { background: #94a3b8; }
+.ph-open      { background: #f59e0b; }
+.ph-handling  { background: #2563eb; }
+.ph-recovered { background: #16a34a; }
+
+.episode {
+  margin-top: 14rpx;
+  font-size: 24rpx;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.fan-btn {
+  margin-top: 18rpx;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 26rpx;
+  font-weight: bold;
+  border-radius: 10rpx;
+}
+.fan-btn[disabled] {
+  background: #cbd5e1 !important;
+  color: #ffffff !important;
+}
+
+/* ---- 最近事件 ---- */
+.recent {
+  background: #ffffff;
+  border: 1rpx solid #e2e8f0;
+  border-radius: 16rpx;
+  padding: 20rpx 28rpx;
+  margin-bottom: 20rpx;
+}
+.section-title {
+  font-size: 24rpx;
+  color: #64748b;
+  margin-bottom: 12rpx;
+}
+.recent-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 24rpx;
+  padding: 8rpx 0;
+  border-top: 1rpx solid #f1f5f9;
+}
+.r-id { color: #2563eb; font-weight: bold; }
+.r-info { color: #475569; }
+
+/* ---- M4 手动分析折叠区 ---- */
+.collapse {
+  background: #ffffff;
+  border: 1rpx solid #e2e8f0;
+  border-radius: 16rpx;
   overflow: hidden;
-  width: 128rpx;
-  height: 128rpx;
-  margin: 20rpx;
-  border-radius: 50%;
 }
-
-.usermotto {
-  margin-top: 200px;
-}
-
-.avatar-wrapper {
-  padding: 0;
-  width: 56px !important;
-  border-radius: 8px;
-  margin-top: 40px;
-  margin-bottom: 40px;
-}
-
-.avatar {
-  display: block;
-  width: 56px;
-  height: 56px;
-}
-
-.nickname-wrapper {
+.collapse-head {
   display: flex;
-  width: 100%;
-  padding: 16px;
-  box-sizing: border-box;
-  border-top: .5px solid rgba(0, 0, 0, 0.1);
-  border-bottom: .5px solid rgba(0, 0, 0, 0.1);
-  color: black;
+  justify-content: space-between;
+  padding: 24rpx 28rpx;
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #475569;
+}
+.collapse-toggle { font-size: 24rpx; color: #94a3b8; font-weight: normal; }
+.collapse-body {
+  padding: 0 28rpx 28rpx;
+  border-top: 1rpx solid #f1f5f9;
 }
 
-.nickname-label {
-  width: 105px;
+.input-group {
+  display: flex;
+  align-items: center;
+  margin: 20rpx 0;
 }
-
-.nickname-input {
+.input-group .label {
+  width: 160rpx;
+  font-size: 26rpx;
+  color: #64748b;
+}
+.input-group input {
   flex: 1;
+  border: 1rpx solid #cbd5e1;
+  border-radius: 8rpx;
+  padding: 12rpx 16rpx;
+  font-size: 26rpx;
+}
+
+.btn {
+  margin-top: 10rpx;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 28rpx;
+  border-radius: 10rpx;
+}
+
+.result-box {
+  margin-top: 20rpx;
+  padding: 18rpx 20rpx;
+  background: #f8fafc;
+  border-radius: 10rpx;
+  font-size: 26rpx;
+  color: #334155;
+  line-height: 1.8;
 }

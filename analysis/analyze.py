@@ -343,11 +343,36 @@ html_content += """
 """
 html_content += ml_section_html
 
-# 7. 任务 A：读取 Dashboard 导出的 events.csv，生成"事件复盘"表
-#    （沿用现有 CSV → report.html 管线：Dashboard 导出 → 放到本目录 → 重新运行本脚本）
-EVENT_COLUMNS = ['宿舍名称', '异常开始时间', '异常类型',
-                 '优先原因', '用户操作', '恢复时间', '最终结果']
+# 7. 任务 A / D：读取 Dashboard 导出的 events.csv，生成"事件复盘"表
+#    D3 的事件字段共 9 个；任务 A 时期的 7 字段 CSV 通过别名映射兼容
+EVENT_FIELDS = [
+    ('event_id', 'event_id'),
+    ('nodeId', '宿舍名称'),
+    ('startTime', '异常开始时间'),
+    ('type', '异常类型'),
+    ('priorityReason', '优先理由'),
+    ('userAction', '用户操作'),
+    ('verifyData', '后续验证数据'),
+    ('status', '事件状态'),
+    ('recoverTime', '恢复时间'),
+]
+EVENT_LEGACY_ALIASES = {
+    'nodeId': '宿舍名称',
+    'type': '异常类型',
+    'priorityReason': '优先原因',
+    'status': '最终结果',
+}
 events_path = 'events.csv'
+
+
+def event_cell(row, key):
+    """优先取新字段名，取不到时回退到任务 A 时期的旧列名。"""
+    value = row.get(key)
+    if value not in (None, ''):
+        return value
+    alias = EVENT_LEGACY_ALIASES.get(key)
+    return row.get(alias, '') if alias else ''
+
 
 if os.path.exists(events_path):
     with open(events_path, encoding='utf-8-sig', newline='') as f:
@@ -356,14 +381,16 @@ if os.path.exists(events_path):
     rows_html = ''
     for row in event_rows:
         cells = ''.join(
-            f'<td>{html.escape(str(row.get(col, "")))}</td>' for col in EVENT_COLUMNS
+            f'<td>{html.escape(str(event_cell(row, key)))}</td>'
+            for key, _ in EVENT_FIELDS
         )
         rows_html += f'<tr>{cells}</tr>'
 
-    header_html = ''.join(f'<th>{col}</th>' for col in EVENT_COLUMNS)
+    header_html = ''.join(f'<th>{label}</th>' for _, label in EVENT_FIELDS)
     html_content += f"""
-    <h2>事件复盘（任务 A）</h2>
-    <p>共 {len(event_rows)} 条事件记录，来自 Dashboard 导出的 events.csv。</p>
+    <h2>事件复盘（任务 A / D）</h2>
+    <p>共 {len(event_rows)} 条事件记录，来自 Dashboard 导出的 events.csv。
+       事件状态取值：OPEN（待处理）/ HANDLING（处理中）/ RECOVERED（已恢复）。</p>
     <table>
         <tr>{header_html}</tr>
         {rows_html}
@@ -372,7 +399,7 @@ if os.path.exists(events_path):
     print(f"已合并 {len(event_rows)} 条事件记录到报告")
 else:
     html_content += """
-    <h2>事件复盘（任务 A）</h2>
+    <h2>事件复盘（任务 A / D）</h2>
     <p>暂无事件记录：请在 Dashboard 点击「导出事件日志」，
     将 events.csv 放到本目录后重新运行本脚本。</p>
     """

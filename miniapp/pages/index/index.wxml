@@ -1,20 +1,80 @@
-<view class="container">
-  <view class="title">DormMate 宿舍助手</view>
-  
-  <view class="input-group">
-    <text>温度 (℃):</text>
-    <input type="number" bindinput="onTempInput" placeholder="请输入温度" value="{{temperature}}" />
-  </view>
-  
-  <view class="input-group">
-    <text>湿度 (%):</text>
-    <input type="number" bindinput="onHumidInput" placeholder="请输入湿度" value="{{humidity}}" />
+<view class="page">
+
+  <!-- 连接状态 -->
+  <view class="conn {{connected ? 'conn-ok' : 'conn-bad'}}">{{connText}}</view>
+
+  <!-- 当前优先关注 -->
+  <view class="priority">
+    <view class="p-node">{{priorityText}}</view>
+    <view class="p-reason">{{priorityReason}}</view>
   </view>
 
-  <button class="btn" bindtap="analyzeEnvironment">分析环境</button>
+  <!-- 三个宿舍（数据按 nodeId 隔离） -->
+  <view class="cards">
+    <view class="card" wx:for="{{nodes}}" wx:key="id">
+      <view class="card-head">
+        <text class="name">{{item.label}}</text>
+        <text class="node-id">{{item.id}}</text>
+      </view>
 
-  <view class="result-box">
-    <view>当前状态：{{status}}</view>
-    <view>建议：{{advice}}</view>
+      <view class="metrics">
+        <view class="metric">
+          <text class="k">温度</text>
+          <text class="v">{{item.temperature}}</text>
+          <text class="u">℃</text>
+        </view>
+        <view class="metric">
+          <text class="k">湿度</text>
+          <text class="v">{{item.humidity}}</text>
+          <text class="u">%</text>
+        </view>
+      </view>
+
+      <view class="tags">
+        <text class="tag {{item.statusClass}}">{{item.status}}</text>
+        <text class="tag {{item.phaseClass}}">{{item.phaseLabel}}</text>
+      </view>
+
+      <view class="episode" wx:if="{{item.episodeText}}">{{item.episodeText}}</view>
+
+      <button class="fan-btn" size="mini" disabled="{{!item.canFan}}"
+              bindtap="onFan" data-node="{{item.id}}">开启风扇</button>
+    </view>
   </view>
+
+  <!-- 本地历史记录（事件闭环归档） -->
+  <view class="recent" wx:if="{{recentEvents.length}}">
+    <view class="section-title">最近恢复事件（本地历史记录）</view>
+    <view class="recent-item" wx:for="{{recentEvents}}" wx:key="event_id">
+      <text class="r-id">{{item.event_id}}</text>
+      <text class="r-info">{{item.nodeId}} · {{item.type}} · {{item.status}}</text>
+    </view>
+  </view>
+
+  <!-- M4 手动分析（保留） -->
+  <view class="collapse">
+    <view class="collapse-head" bindtap="toggleManual">
+      <text>手动环境分析（M4）</text>
+      <text class="collapse-toggle">{{manualOpen ? '收起 ▲' : '展开 ▼'}}</text>
+    </view>
+
+    <view class="collapse-body" wx:if="{{manualOpen}}">
+      <view class="input-group">
+        <text class="label">温度 (℃)</text>
+        <input type="number" bindinput="onTempInput" placeholder="请输入温度" value="{{temperature}}" />
+      </view>
+      <view class="input-group">
+        <text class="label">湿度 (%)</text>
+        <input type="number" bindinput="onHumidInput" placeholder="请输入湿度" value="{{humidity}}" />
+      </view>
+
+      <button class="btn" bindtap="analyzeEnvironment">分析环境</button>
+
+      <view class="result-box">
+        <view>当前状态：{{manualStatus}}</view>
+        <view>建议：{{manualAdvice}}</view>
+      </view>
+    </view>
+  </view>
+
 </view>
